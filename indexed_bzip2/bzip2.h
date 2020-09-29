@@ -629,6 +629,7 @@ BZ2Reader::BlockHeader::readBlockHeader()
                     hh += 1 - ( ( kk & 1 ) << 1 );
                 } else {
                     bitReader().m_inbufBitCount++;
+                    bitReader().m_readBitsCount--;
                     break;
                 }
             }
