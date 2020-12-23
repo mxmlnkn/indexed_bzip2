@@ -1,6 +1,5 @@
 """
-Pyrex/C extension supporting `bx.misc.seekbzip2` (wrapping the low level
-functions in `micro-bunzip.c`).
+Cython wrapper for the BZ2Reader and ParallelBZ2Reader C++ classes.
 """
 
 from libc.stdlib cimport malloc, free
@@ -26,6 +25,7 @@ cdef extern from "BZ2Reader.hpp":
     cppclass BZ2Reader:
         BZ2Reader(string) except +
         BZ2Reader(int) except +
+
         bool eof() except +
         int fileno() except +
         bool seekable() except +
@@ -33,8 +33,30 @@ cdef extern from "BZ2Reader.hpp":
         bool closed() except +
         size_t seek(lli, int) except +
         size_t tell() except +
-        size_t tellCompressed() except +
         size_t size() except +
+
+        size_t tellCompressed() except +
+        int read(int, char*, size_t) except +
+        bool blockOffsetsComplete() except +
+        map[size_t, size_t] blockOffsets() except +
+        map[size_t, size_t] availableBlockOffsets() except +
+        void setBlockOffsets(map[size_t, size_t]) except +
+
+cdef extern from "ParallelBZ2Reader.hpp":
+    cppclass ParallelBZ2Reader:
+        ParallelBZ2Reader(string, size_t) except +
+        ParallelBZ2Reader(int, size_t) except +
+
+        bool eof() except +
+        int fileno() except +
+        bool seekable() except +
+        void close() except +
+        bool closed() except +
+        size_t seek(lli, int) except +
+        size_t tell() except +
+        size_t size() except +
+
+        size_t tellCompressed() except +
         int read(int, char*, size_t) except +
         bool blockOffsetsComplete() except +
         map[size_t, size_t] blockOffsets() except +
@@ -102,11 +124,76 @@ cdef class _IndexedBzip2File():
         return self.bz2reader.setBlockOffsets(offsets)
 
 
+cdef class _IndexedBzip2FileParallel():
+    cdef ParallelBZ2Reader* bz2reader
+
+    def __cinit__(self, fileNameOrDescriptor, parallelization):
+        if isinstance(fileNameOrDescriptor, basestring):
+            self.bz2reader = new ParallelBZ2Reader(<string>fileNameOrDescriptor.encode(), <int>parallelization)
+        else:
+            self.bz2reader = new ParallelBZ2Reader(<int>fileNameOrDescriptor, <int>parallelization)
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __dealloc__(self):
+        del self.bz2reader
+
+    def close(self):
+        self.bz2reader.close()
+
+    def closed(self):
+        return self.bz2reader.closed()
+
+    def fileno(self):
+        return self.bz2reader.fileno()
+
+    def seekable(self):
+        return self.bz2reader.seekable()
+
+    def readinto(self, bytes_like):
+        bytes_count = 0
+
+        cdef Py_buffer buffer
+        PyObject_GetBuffer(bytes_like, &buffer, PyBUF_SIMPLE | PyBUF_ANY_CONTIGUOUS)
+        try:
+            bytes_count = self.bz2reader.read(-1, <char*>buffer.buf, len(bytes_like))
+        finally:
+            PyBuffer_Release(&buffer)
+
+        return bytes_count
+
+    def seek(self, offset, whence):
+        return self.bz2reader.seek(offset, whence)
+
+    def tell(self):
+        return self.bz2reader.tell()
+
+    def size(self):
+        return self.bz2reader.size()
+
+    def tell_compressed(self):
+        return self.bz2reader.tellCompressed()
+
+    def block_offsets_complete(self):
+        return self.bz2reader.blockOffsetsComplete()
+
+    def block_offsets(self):
+        return <dict>self.bz2reader.blockOffsets()
+
+    def available_block_offsets(self):
+        return <dict>self.bz2reader.availableBlockOffsets()
+
+    def set_block_offsets(self, offsets):
+        return self.bz2reader.setBlockOffsets(offsets)
+
+
 # Extra class because cdefs are not visible from outside but cdef class can't inherit from io.BufferedIOBase
 
 class IndexedBzip2FileRaw(io.RawIOBase):
-    def __init__(self, filename):
-        self.bz2reader = _IndexedBzip2File(filename)
+    def __init__(self, filename, parallelization = 1):
+        self.bz2reader = _IndexedBzip2File(filename) if parallelization == 1 \
+                         else _IndexedBzip2FileParallel(filename, parallelization)
         self.name = filename
         self.mode = 'rb'
 
@@ -128,8 +215,8 @@ class IndexedBzip2FileRaw(io.RawIOBase):
         return True
 
 class IndexedBzip2File(io.BufferedReader):
-    def __init__(self, filename):
-        fobj = IndexedBzip2FileRaw(filename)
+    def __init__(self, filename, parallelization = 1):
+        fobj = IndexedBzip2FileRaw(filename, parallelization)
         self.bz2reader = fobj.bz2reader
 
         self.tell_compressed         = self.bz2reader.tell_compressed
