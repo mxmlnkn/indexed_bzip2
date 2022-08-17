@@ -787,6 +787,25 @@ public:
             };
 
         /**
+         * @todo Add flag to BitReader like: "do not free memory". Or maybe, something to dynamically
+         *       adjust the buffer size (to the offset range we are to analyze) to avoid buffer refills
+         *       when we have to look quite far to find a block!
+         * @todo Optimize SharedFileReader that it orders file accesses preferring sequential ones.
+         *       This would require a complicated "subscribe with requested offset - callback" interface.
+         *       E.g., subscribe, set function to be executed, which loads the read bytes "async" into
+         *       an internal buffer on callback and sets some kind of flag.
+         *       -> condition_variable wait until that flag has been set by the callback
+         *       - The SharedFileReader would then choose the best-suited callback given the requested
+         *         offset compared to the current one and maybe also executing callbacks that have waited
+         *         too long at some point as a fallback.
+         *       - The callback must not do computation to not bottleneck all other read calls!
+         * @todo Is pread(2) in parallel? faster than sequential serial read calls?
+         * @todo All that ordering, locks, and complexity and stuff might not even be necessary when
+         *       using mmap, which is inherently thread-safe because it basically is just a read-only
+         *       virtual address space / memory address range.
+         */
+
+        /**
          * 1. Repeat for each chunk:
          *    1. Initialize both offsets with possible matches inside the current chunk.
          *    2. Repeat until both offsets are invalid because no further matches were found in the chunk:

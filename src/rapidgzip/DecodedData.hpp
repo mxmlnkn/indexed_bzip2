@@ -229,6 +229,8 @@ private:
      * This order is fixed because there should be no reason for markers after we got enough data without markers!
      * There is no append( DecodedData ) method because this property might not be retained after using
      * @ref cleanUnmarkedData.
+     *
+     * @todo Test if one/two contiguous vectors with a somewhat well-chosen capacity speed things up!
      */
     std::vector<MarkerVector> dataWithMarkers;
     std::vector<MarkerVector> reusedDataBuffers;
