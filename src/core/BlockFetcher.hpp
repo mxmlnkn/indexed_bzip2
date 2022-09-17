@@ -166,7 +166,7 @@ public:
     };
 
 private:
-    static constexpr bool SHOW_PROFILE{ false };
+    static constexpr bool SHOW_PROFILE{ true };
 
 protected:
     BlockFetcher( std::shared_ptr<BlockFinder> blockFinder,

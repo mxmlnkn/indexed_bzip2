@@ -107,7 +107,7 @@ public:
     using BlockFinder = typename BaseType::BlockFinder;
 
 private:
-    static constexpr bool SHOW_PROFILE{ false };
+    static constexpr bool SHOW_PROFILE{ true };
 
 public:
     GzipBlockFetcher( BitReader                    bitReader,

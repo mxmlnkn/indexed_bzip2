@@ -34,7 +34,7 @@ namespace pragzip
 /**
  * @note Calls to this class are not thread-safe! Even though they use threads to evaluate them in parallel.
  */
-template<bool ENABLE_STATISTICS = false>
+template<bool ENABLE_STATISTICS = true>
 class ParallelGzipReader final :
     public FileReader
 {
@@ -53,7 +53,7 @@ public:
     using WriteFunctor = std::function<void ( const void*, uint64_t )>;
 
 private:
-    static constexpr bool SHOW_PROFILE{ false };
+    static constexpr bool SHOW_PROFILE{ true };
 
 public:
     /**
