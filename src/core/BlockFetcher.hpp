@@ -277,7 +277,8 @@ public:
                        ( queuedResult.valid() && ( queuedResult.wait_for( 0s ) == std::future_status::ready ) );
             };
 
-        prefetchNewBlocks( getPartitionOffsetFromOffset, resultIsReady );
+        prefetchNewBlocks( getPartitionOffsetFromOffset, resultIsReady,
+                           /* Reserve one thread for the on-demand fetch. */ 1 );
 
         /* Return result */
         if ( cachedResult.has_value() ) {
@@ -293,8 +294,16 @@ public:
         using namespace std::chrono_literals;
         /* At ~4 MiB compressed blocks and ~200 MB/s compressed bandwidth for base64, one block might take ~20ms. */
         while ( queuedResult.wait_for( 1ms ) == std::future_status::timeout ) {
-            prefetchNewBlocks( getPartitionOffsetFromOffset, resultIsReady );
+            prefetchNewBlocks( getPartitionOffsetFromOffset, resultIsReady,
+                               /* Reserve one thread for the on-demand fetch. */ 1 );
         }
+
+        /* Now that processing has finished we can prefetch one additional block. But, we need to be very sure
+         * about this or we are using up our on-demand thread for a possibly unneeded block. */
+        if ( m_fetchingStrategy.isSequential() ) {
+            prefetchNewBlocks( getPartitionOffsetFromOffset, resultIsReady, 0 );
+        }
+
         auto result = std::make_shared<BlockData>( queuedResult.get() );
         [[maybe_unused]] const auto futureGetDuration = duration( tFutureGetStart );
 
@@ -431,6 +440,7 @@ private:
         }
     }
 
+protected:
     /**
      * Fills m_prefetching up with a maximum of m_parallelization-1 new tasks predicted
      * based on the given last accessed block index(es).
@@ -439,15 +449,14 @@ private:
      */
     void
     prefetchNewBlocks( const GetPartitionOffset&    getPartitionOffsetFromOffset,
-                       const std::function<bool()>& stopPrefetching )
+                       const std::function<bool()>& stopPrefetching,
+                       const size_t                 reservedThreadCount )
     {
         /* Make space for new asynchronous prefetches. */
         processReadyPrefetches();
 
         const auto threadPoolSaturated =
-            [&] () {
-                return m_prefetching.size() + /* thread with the requested block */ 1 >= m_threadPool.capacity();
-            };
+            [&] () { return m_prefetching.size() + reservedThreadCount >= m_threadPool.capacity(); };
 
         if ( threadPoolSaturated() ) {
             return;
@@ -542,16 +551,9 @@ private:
                 std::logic_error( "Submitted future could not be inserted to prefetch queue!" );
             }
         }
-
-        /* Note that only m_parallelization-1 blocks will be prefetched. Meaning that even with the unconditionally
-         * submitted requested block, the thread pool should never contain more than m_parallelization tasks!
-         * All tasks submitted to the thread pool, should either exist in m_prefetching or only temporary inside
-         * 'resultFuture' in the 'read' method. */
-        if ( m_threadPool.unprocessedTasksCount( 0 ) > m_parallelization ) {
-            throw std::logic_error( "The thread pool should not have more tasks than there are prefetching futures!" );
-        }
     }
 
+private:
     [[nodiscard]] std::future<BlockData>
     submitOnDemandTask( const size_t                blockOffset,
                         const std::optional<size_t> nextBlockOffset )

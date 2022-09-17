@@ -344,6 +344,15 @@ public:
         return m_maxDecompressedChunkSize;
     }
 
+    void
+    prefetch( const std::function<bool()>& stopPrefetching )
+    {
+        const auto getPartitionOffsetFromOffset =
+            [this] ( auto offset ) { return m_blockFinder->partitionOffsetContainingOffset( offset ); };
+
+        BaseType::prefetchNewBlocks( getPartitionOffsetFromOffset, stopPrefetching, 0 );
+    }
+
 private:
     void
     waitForReplacedMarkers( const std::shared_ptr<ChunkData>& chunkData,

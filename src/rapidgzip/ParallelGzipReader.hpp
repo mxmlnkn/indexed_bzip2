@@ -20,6 +20,7 @@
 #include <common.hpp>
 #include <filereader/FileReader.hpp>
 #include <filereader/Shared.hpp>
+#include <ThreadPool.hpp>
 
 #ifdef WITH_PYTHON_SUPPORT
     #include <filereader/Python.hpp>
@@ -481,7 +482,25 @@ public:
 
             if ( writeFunctor ) {
                 [[maybe_unused]] const auto tWriteStart = now();
-                writeFunctor( chunkData, offsetInBlock, nBytesToDecode );
+
+                /** @todo pipeline writing by not simply waiting right after but instead push the future into a queue */
+                auto future = m_writeThread.submit(
+                    [&writeFunctor, offsetInBlock, nBytesToDecode, chunkData = chunkData] () {
+                        writeFunctor( chunkData, offsetInBlock, nBytesToDecode );
+                } );
+
+                using namespace std::chrono_literals;
+
+                const auto finishedWriting =
+                    [&future] () {
+                        return !future.valid() || ( future.wait_for( 0s ) != std::future_status::timeout );
+                    };
+
+                while ( future.wait_for( 0.25ms ) == std::future_status::timeout ) {
+                    chunkFetcher().prefetch( finishedWriting );
+                }
+                future.get();
+
                 if constexpr ( ENABLE_STATISTICS ) {
                     m_writeOutputTime += duration( tWriteStart );
                 }
@@ -1072,5 +1091,13 @@ private:
     CRC32Calculator m_crc32;
     uint64_t m_nextCRC32ChunkOffset{ 0 };
     std::unordered_map<size_t, uint32_t> m_deflateStreamCRC32s;
+
+    /**
+     * This thread will be used to call the given writeFunctor. It is necessary, so that we can keep prefetching
+     * new work while waiting for writing to finish. Ideally, we would have used std::async for this but
+     * implementations of this often don't use a thread pool and we want to avoid thread creation for each chunk
+     * result to be written back.
+     */
+    ThreadPool m_writeThread{ 1 };
 };
 }  // namespace rapidgzip
