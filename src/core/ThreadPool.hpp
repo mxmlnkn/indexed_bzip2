@@ -26,6 +26,15 @@
 /**
  * Function evaluations can be given to a ThreadPool instance,
  * which assigns the evaluation to one of its threads to be evaluated in parallel.
+ *
+ * @todo Set affinity for each thread to avoid migration to keep a 1:1 mapping of thread pool threads to cores.
+ *       If there are as many threads as cores, or maybe one thread less, then migrating threads would only be
+ *       a hindrance because we are doing work scheduling ourselves and would want to avoid migrating data on
+ *       NUMA architectures.
+ * @todo Make it possible to either pause execution (until further required input data arrives) or make it such
+ *       that those "finished" threads can resume work on the same NUMA domain again.
+ *       Determining the NUMA domain might be prohibitively slow even at startup. I definitely can't run extended
+ *       benchmarks for that.
  */
 class ThreadPool
 {
