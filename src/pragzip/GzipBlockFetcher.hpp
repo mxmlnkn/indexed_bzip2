@@ -355,6 +355,19 @@ public:
                     /** @todo Avoid out of memory issues for very large compression ratios by using a simple runtime
                      *        length encoding or by only undoing the Huffman coding in parallel and the LZ77 serially,
                      *        or by stopping decoding at a threshold and fall back to serial decoding in that case? */
+
+                    if ( result.size() > 128_Mi ) {
+                        std::cerr << "Decoded size: "
+                                  << formatBytes( result.sizeInBytes() )
+                                  << ", encoded size: "
+                                  << formatBits( result.encodedSizeInBits ) << ", compression factor: "
+                                  << static_cast<double>( result.size() ) / result.encodedSizeInBits * 8
+                                  << ", size with markers: " << formatBytes( result.dataWithMarkersSize() )
+                                  << ", capacity: " << formatBytes( result.capacityInBytes() )
+                                  << ", wasted capacity: "
+                                  << formatBytes( result.capacityInBytes() - result.sizeInBytes() ) << "\n";
+                    }
+
                     return result;
                 } catch ( const std::exception& exception ) {
                     /* Ignore errors and try next block candidate. This is very likely to happen if @ref blockOffset
