@@ -258,7 +258,7 @@ writeAllSplice( [[maybe_unused]] const int         outputFileDescriptor,
                 [[maybe_unused]] const void* const dataToWrite,
                 [[maybe_unused]] const size_t      dataToWriteSize )
 {
-#if 0
+#if HAVE_VMSPLICE
     /**
      * Short overview of syscalls that optimize copies by instead copying full page pointers into the
      * pipe buffers inside the kernel:
