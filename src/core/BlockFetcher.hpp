@@ -197,6 +197,8 @@ public:
             m_cache.shrinkTo( 0 );
             m_prefetchCache.shrinkTo( 0 );
             std::cerr << ( ThreadSafeOutput() << "[BlockFetcher::~BlockFetcher]" << statistics().print() );
+
+            std::cerr << "Allocated in total " << formatBytes( sumAllocated ) << "\n";
         }
     }
 
