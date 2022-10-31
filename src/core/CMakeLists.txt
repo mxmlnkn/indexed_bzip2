@@ -14,6 +14,7 @@ target_sources(core INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/common.hpp
     ${CMAKE_CURRENT_LIST_DIR}/FileUtils.hpp
     ${CMAKE_CURRENT_LIST_DIR}/JoiningThread.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/MmapAllocator.hpp
     ${CMAKE_CURRENT_LIST_DIR}/ParallelBitStringFinder.hpp
     ${CMAKE_CURRENT_LIST_DIR}/Prefetcher.hpp
     ${CMAKE_CURRENT_LIST_DIR}/StreamedResults.hpp

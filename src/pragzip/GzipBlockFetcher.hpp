@@ -635,7 +635,7 @@ private:
         BlockData result;
         result.encodedOffsetInBits = blockOffset;
 
-        std::vector<uint8_t> decoded( decodedSize );
+        SplicableVector<uint8_t> decoded( decodedSize );
         if ( deflateWrapper.read( decoded.data(), decoded.size() ) != decoded.size() ) {
             throw std::runtime_error( "Could not decode as much as requested!" );
         }

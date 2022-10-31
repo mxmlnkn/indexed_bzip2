@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include <MmapAllocator.hpp>
 #include <VectorView.hpp>
 
 #include "definitions.hpp"
@@ -84,11 +85,11 @@ public:
 
 public:
     void
-    append( std::vector<uint8_t>&& toAppend )
+    append( SplicableVector<uint8_t>&& toAppend )
     {
         if ( !toAppend.empty() ) {
             data.emplace_back( std::move( toAppend ) );
-            data.back().shrink_to_fit();
+            //data.back().shrink_to_fit();
         }
     }
 
@@ -156,12 +157,12 @@ public:
     void
     shrinkToFit()
     {
-        for ( auto& container : data ) {
-            container.shrink_to_fit();
-        }
-        for ( auto& container : dataWithMarkers ) {
-            container.shrink_to_fit();
-        }
+        //for ( auto& container : data ) {
+        //    container.shrink_to_fit();
+        //}
+        //for ( auto& container : dataWithMarkers ) {
+        //    container.shrink_to_fit();
+        //}
     }
 
     /**
@@ -184,7 +185,7 @@ public:
      * @ref cleanUnmarkedData.
      */
     std::vector<std::vector<uint16_t> > dataWithMarkers;
-    std::vector<std::vector<uint8_t> > data;
+    std::vector<SplicableVector<uint8_t> > data;
 };
 
 
@@ -222,7 +223,7 @@ DecodedData::applyWindow( WindowView const& window )
         return;
     }
 
-    std::vector<uint8_t> downcasted( dataWithMarkersSize() );
+    SplicableVector<uint8_t> downcasted( dataWithMarkersSize() );
     size_t offset{ 0 };
     for ( auto& chunk : dataWithMarkers ) {
         replaceMarkerBytes( &chunk, window );
