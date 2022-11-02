@@ -28,6 +28,12 @@ target_link_libraries(testCommon PRIVATE core)
 add_test(NAME Test-Common COMMAND testCommon)
 add_dependencies(all_tests testCommon)
 
+add_executable(testMmapAllocator)
+target_sources(testMmapAllocator PRIVATE ${CMAKE_CURRENT_LIST_DIR}/testMmapAllocator.cpp)
+target_link_libraries(testMmapAllocator PRIVATE core)
+add_test(NAME Test-MmapAllocator COMMAND testMmapAllocator)
+add_dependencies(all_tests testMmapAllocator)
+
 add_executable(testParallelBitStringFinder)
 target_sources(testParallelBitStringFinder PRIVATE ${CMAKE_CURRENT_LIST_DIR}/testParallelBitStringFinder.cpp)
 target_link_libraries(testParallelBitStringFinder PRIVATE core)

@@ -603,6 +603,12 @@ pragzipCLI( int argc, char** argv )
         std::cerr << "Decompressed in total " << totalBytesRead << " B in " << duration( t0, t1 ) << " s -> "
                   << static_cast<double>( totalBytesRead ) / 1e6 / duration( t0, t1 ) << " MB/s\n";
 
+        std::cerr
+        << "Allocation statistics:\n"
+        << "    Total allocated : " << formatBytes( MmapAllocator<uint8_t>::sumAllocated ) << "\n"
+        << "    Mmap calls      : " << mmapCallCount << "\n"
+        << "    Munmap calls    : " << munmapCallCount << "\n";
+
         auto& out = writingToStdout ? std::cerr : std::cout;
         if ( countBytes != countLines ) {
             out << ( countBytes ? totalBytesRead : newlineCount );
