@@ -16,19 +16,28 @@
 #include <sys/mman.h>
 
 
-inline static std::atomic<size_t> mmapCallCount{ 0 };
-inline static std::atomic<size_t> munmapCallCount{ 0 };
+namespace MmapAllocatorStatistics
+{
+    inline static std::atomic<size_t> sumAllocated{ 0 };
+    inline static std::atomic<size_t> mmapCallCount{ 0 };
+    inline static std::atomic<size_t> munmapCallCount{ 0 };
+    inline static std::atomic<size_t> reusedChunkCount{ 0 };
+}
+
+
+using unique_mmap_ptr = std::unique_ptr<void, std::function<void ( void* )> >;
 
 
 [[nodiscard]] inline static void*
-allocateWithMmap( size_t size )
+allocateWithMmapUnsafe( size_t size )
 {
     auto* const result = mmap( nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
                                /* fd */ -1, /* offset */ 0 );
     if ( result == (void*)-1 ) {
         throw std::bad_alloc();
     }
-    ++mmapCallCount;
+
+    ++MmapAllocatorStatistics::mmapCallCount;
     return result;
 }
 
@@ -37,12 +46,20 @@ inline static void
 deallocateWithMunmap( void*  pointer,
                       size_t size )
 {
-    if ( pointer == nullptr ) {
-        return;
+    if ( pointer != nullptr ) {
+        ++MmapAllocatorStatistics::munmapCallCount;
+        munmap( pointer, size );
     }
-    ++munmapCallCount;
-    munmap( pointer, size );
 }
+
+
+[[nodiscard]] inline static unique_mmap_ptr
+allocateWithMmap( size_t size )
+{
+    return unique_mmap_ptr( allocateWithMmapUnsafe( size ),
+                            [size] ( void* pointer ) { deallocateWithMunmap( pointer, size ); } );
+}
+
 
 
 class AtomicLock
@@ -112,8 +129,12 @@ private:
      * @endverbatim
      * The munmap calls actually slow things down and commenting them out yields the 2.8 GB/s again :(
      */
-    static constexpr size_t SLAB_SIZE = 128_Mi;
+    static constexpr size_t SLAB_SIZE = 4_Mi;
 
+    /**
+     * This improves speed measurably but only by 3%. It might make sense to use thread-local storage to avoid
+     * lock altogether. Luckily it should be possible because we are actually reusing threads with a thread pool!
+     */
     class LockFreeSlab
     {
     public:
@@ -125,7 +146,7 @@ private:
 
         ~LockFreeSlab()
         {
-            deallocateWithMunmap( m_data.exchange( nullptr ), m_chunkCount * m_chunkSize );
+            deallocateSlab();
         }
 
         [[nodiscard]] size_t
@@ -174,9 +195,10 @@ private:
                 return false;
             }
 
-            if ( ++m_freedChunkCount == m_chunkCount ) {
-                deallocateWithMunmap( m_data.exchange( nullptr ), m_chunkCount * m_chunkSize );
-            }
+            ++m_freedChunkCount;
+            //if ( ++m_freedChunkCount == m_chunkCount ) {
+            //    deallocateWithMunmap( m_data.exchange( nullptr ), m_chunkCount * m_chunkSize );
+            //}
             //if ( ++m_freedChunkCount == m_chunkCount ) {
             //    /* Even slower than simply calling munmap here :( */
             //    madvise( m_data.load(), m_chunkCount * m_chunkSize, MADV_DONTNEED );
@@ -190,6 +212,16 @@ private:
             return m_freedChunkCount >= m_chunkCount;
         }
 
+        [[nodiscard]] bool
+        freeUnused()
+        {
+            if ( emptied() ) {
+                deallocateSlab();
+                return true;
+            }
+            return false;
+        }
+
     private:
         void
         ensureAllocatedSlab()
@@ -200,8 +232,14 @@ private:
                     std::this_thread::sleep_for( 10ns );
                 }
             } else {
-                m_data = allocateWithMmap( m_chunkCount * m_chunkSize );
+                m_data = allocateWithMmapUnsafe( m_chunkCount * m_chunkSize );
             }
+        }
+
+        void
+        deallocateSlab()
+        {
+            deallocateWithMunmap( m_data.exchange( nullptr ), m_chunkCount * m_chunkSize );
         }
 
     private:
@@ -219,6 +257,7 @@ private:
         std::atomic<size_t> m_freedChunkCount{ 0 };
     };
 
+
     class ThreadUnsafeSlab
     {
     public:
@@ -227,6 +266,13 @@ private:
             m_chunkCount( chunkCount ),
             m_chunkSize( chunkSize )
         {}
+
+        ThreadUnsafeSlab( ThreadUnsafeSlab&& ) = default;
+
+        ~ThreadUnsafeSlab()
+        {
+            deallocateSlab();
+        }
 
         [[nodiscard]] size_t
         chunkSize() const noexcept
@@ -246,19 +292,24 @@ private:
         [[nodiscard]] void*
         allocate()
         {
-            if ( m_usedChunkCount >= m_chunkCount ) {
-                return nullptr;
+            auto chunkIndex = m_usedChunkCount;
+            if ( chunkIndex >= m_chunkCount ) {
+                /* Check whether there are reusable chunks. */
+                if ( m_freedChunks.empty() ) {
+                    return nullptr;
+                }
+
+                chunkIndex = m_freedChunks.back();
+                m_freedChunks.pop_back();
             }
 
-            const auto chunkIndex = m_usedChunkCount;
             ++m_usedChunkCount;
 
-            if ( m_data == nullptr ) {
+            if ( !m_data ) {
                 m_data = allocateWithMmap( m_chunkCount * m_chunkSize );
             }
 
-            m_usedChunks[chunkIndex] = true;
-            return reinterpret_cast<void*>( reinterpret_cast<uintptr_t>( m_data ) + chunkIndex * m_chunkSize );
+            return reinterpret_cast<void*>( reinterpret_cast<uintptr_t>( m_data.get() ) + chunkIndex * m_chunkSize );
         }
 
         /**
@@ -268,19 +319,13 @@ private:
         deallocate( void* pointer )
         {
             const auto chunkIndex = static_cast<size_t>( reinterpret_cast<uintptr_t>( pointer )
-                                                         - reinterpret_cast<uintptr_t>( m_data ) ) / m_chunkSize;
-            if ( ( m_data == nullptr ) || ( chunkIndex >= m_chunkCount ) ) {
+                                                         - reinterpret_cast<uintptr_t>( m_data.get() ) ) / m_chunkSize;
+            if ( !m_data || ( chunkIndex >= m_chunkCount ) ) {
                 return false;
             }
 
-            if ( m_usedChunks[chunkIndex] ) {
-                m_usedChunks[chunkIndex] = false;
-                ++m_freedChunkCount;
-                if ( m_freedChunkCount >= m_chunkCount ) {
-                    deallocateWithMunmap( m_data, m_chunkCount * m_chunkSize );
-                    m_data = nullptr;
-                }
-            }
+            --m_usedChunkCount;
+            m_freedChunks.emplace_back( chunkIndex);
 
             return true;
         }
@@ -288,27 +333,41 @@ private:
         [[nodiscard]] bool
         emptied() const noexcept
         {
-            return m_freedChunkCount >= m_chunkCount;
+            return m_usedChunkCount == 0;
+        }
+
+        [[nodiscard]] bool
+        freeUnused()
+        {
+            if ( emptied() ) {
+                deallocateSlab();
+                return true;
+            }
+            return false;
+        }
+
+    private:
+        void
+        deallocateSlab()
+        {
+            m_data.reset();
         }
 
     private:
         size_t m_chunkCount;
         size_t m_chunkSize;
 
-        void* m_data{ nullptr };
+        unique_mmap_ptr m_data;
 
         size_t m_usedChunkCount{ 0 };
-        size_t m_freedChunkCount{ 0 };
-        /** Assuming no double-frees, this is not necessary because we do not want to reuse freed chunks! */
-        std::vector<bool> m_usedChunks{ std::vector<bool>( m_chunkCount, false ) };
+        std::vector<size_t> m_freedChunks;
     };
 
+
+    template<typename Slab = ThreadUnsafeSlab,
+             typename Slabs = std::vector<Slab> >
     struct BucketWithLock
     {
-    private:
-        using Slab = ThreadUnsafeSlab;
-        using Slabs = std::vector<Slab>;
-
     public:
         explicit
         BucketWithLock( size_t chunkSize ) :
@@ -373,6 +432,15 @@ private:
             }
         }
 
+        void
+        freeUnused()
+        {
+            std::scoped_lock lock{ m_mutex };
+            m_slabs.erase( std::remove_if( m_slabs.begin(), m_slabs.end(),
+                                           [] ( auto& slab ) { return slab.freeUnused(); } ),
+                           m_slabs.end() );
+        }
+
     private:
         const size_t m_chunkSize;  /** Slabs will be allocated with this chunk size. */
 
@@ -381,12 +449,10 @@ private:
         AtomicLock m_mutex;
     };
 
+    template<typename Slab = LockFreeSlab,
+             typename Slabs = std::list<Slab> >
     struct BucketUsingLockFreeSlab
     {
-    private:
-        using Slab = LockFreeSlab;
-        using Slabs = std::list<Slab>;
-
     public:
         explicit
         BucketUsingLockFreeSlab( size_t chunkSize ) :
@@ -464,8 +530,130 @@ private:
         AtomicLock m_mutex;
     };
 
-    using Bucket = BucketUsingLockFreeSlab;
 
+    template<typename Slab = ThreadUnsafeSlab>
+    struct ThreadUnsafeBucket
+    {
+    public:
+        explicit
+        ThreadUnsafeBucket( size_t chunkSize ) :
+            m_chunkSize( chunkSize )
+        {}
+
+        [[nodiscard]] size_t
+        chunkSize() const noexcept
+        {
+            return m_chunkSize;
+        }
+
+        /**
+         * @return a pointer to a memory sized @p size.
+         */
+        [[nodiscard]] void*
+        allocate()
+        {
+            if ( m_slabs.empty() ) {
+                m_slabs.emplace_back( SLAB_SIZE / m_chunkSize, m_chunkSize );
+            }
+
+            auto* chunk = m_slabs.back().allocate();
+            if ( chunk != nullptr ) {
+                //std::cerr << ( ThreadSafeOutput() << "Allocated" << chunk << "in bucket with chunk sizes"
+                //               << formatBytes( m_chunkSize ) );
+                return chunk;
+            }
+
+            /* Try to reuse deallocated chunks. */
+            while ( !m_slabsWithFreedChunks.empty() ) {
+                const auto i = m_slabsWithFreedChunks.back();
+
+                if ( i < m_slabs.size() ) {
+                    std::cerr << ( ThreadSafeOutput() << "Allocate from slab with freed chunks" );
+                    chunk = m_slabs[i].allocate();
+                    if ( chunk != nullptr ) {
+                        ++MmapAllocatorStatistics::reusedChunkCount;
+                        return chunk;
+                    }
+                }
+
+                m_slabsWithFreedChunks.pop_back();
+            }
+
+            std::cerr << ( ThreadSafeOutput() << "Allocate ANOTHER slab!" );
+            m_slabs.emplace_back( SLAB_SIZE / m_chunkSize, m_chunkSize );
+            chunk = m_slabs.back().allocate();
+
+            if ( chunk != nullptr ) {
+                //std::cerr << ( ThreadSafeOutput() << "Allocated" << chunk << "in bucket with chunk sizes"
+                //               << formatBytes( m_chunkSize ) );
+                return chunk;
+            }
+
+            throw std::bad_alloc();
+        }
+
+        void
+        deallocate( void* pointer )
+        {
+            /* Go over all slabs to find the containing one and deallocate there. */
+            std::optional<size_t> freedSlab;
+            for ( size_t i = 0; i < m_slabs.size(); ++i ) {
+                auto& slab = m_slabs[i];
+                if ( slab.deallocate( pointer ) ) {
+                    freedSlab = i;
+                    //if ( slab.emptied() ) {
+                    //    ++m_emptiedSlabs;
+                    //}
+                    break;
+                }
+            }
+
+            if ( !freedSlab ) {
+                std::cerr << ( ThreadSafeOutput() << "Failed to find correct slab (out of" << m_slabs.size()
+                               << ") in bucket with chunk sizes" << formatBytes( m_chunkSize ) << "given the pointer:"
+                               << pointer );
+                throw std::bad_alloc();
+            }
+
+            if ( m_slabsWithFreedChunks.empty() || ( m_slabsWithFreedChunks.back() != *freedSlab ) ) {
+                m_slabsWithFreedChunks.emplace_back( *freedSlab );
+                std::cerr << ( ThreadSafeOutput() << "Remember slab" << *freedSlab << "with freed chunks" );
+            }
+
+            /* This should be effectively linear because it is only done every N/2 time and the algorithm executed
+             * with that frequency is O(N) leading to O(N / (N/2)) = O(1) on average. */
+            //if ( ( m_emptiedSlabs > 10 ) && ( 2 * m_emptiedSlabs >= m_slabs.size() ) ) {
+            //    if ( ( m_emptiedSlabs > 10 ) && ( 2 * m_emptiedSlabs >= m_slabs.size() ) ) {
+            //        for ( auto slab = m_slabs.begin(); slab != m_slabs.end(); ) {
+            //            if ( slab->emptied() ) {
+            //                slab = m_slabs.erase( slab );
+            //            } else {
+            //                ++slab;
+            //            }
+            //        }
+            //    }
+            //    m_emptiedSlabs = 0;
+            //}
+        }
+
+        void
+        freeUnused()
+        {
+            m_slabs.erase( std::remove_if( m_slabs.begin(), m_slabs.end(),
+                                           [] ( auto& slab ) { return slab.freeUnused(); } ),
+                           m_slabs.end() );
+        }
+
+    private:
+        const size_t m_chunkSize;  /** Slabs will be allocated with this chunk size. */
+
+        std::vector<Slab> m_slabs;
+        //size_t m_emptiedSlabs{ 0 };
+        std::vector<size_t> m_slabsWithFreedChunks;
+    };
+
+
+    template<typename Bucket>
     class MemoryPool
     {
     public:
@@ -475,7 +663,7 @@ private:
             if ( const auto bucketIndex = bucketBySize( size ); bucketIndex.has_value() ) {
                 return m_buckets[*bucketIndex].allocate();
             }
-            return allocateWithMmap( size );
+            return allocateWithMmapUnsafe( size );
         }
 
         void
@@ -486,6 +674,14 @@ private:
                 m_buckets[*bucketIndex].deallocate( pointer );
             } else {
                 deallocateWithMunmap( pointer, size );
+            }
+        }
+
+        void
+        freeUnused()
+        {
+            for ( auto& bucket : m_buckets ) {
+                bucket.freeUnused();
             }
         }
 
@@ -523,8 +719,8 @@ public:
         //std::cerr << "Allocate " << nElementsToAllocate * sizeof( ElementType ) / 1024 << " KiB\n";
 
         auto const nBytesToAllocate = nElementsToAllocate * sizeof( ElementType );
-        auto* const result = pool.allocate( nBytesToAllocate );
-        sumAllocated += nBytesToAllocate;
+        auto* const result = m_pool->allocate( nBytesToAllocate );
+        MmapAllocatorStatistics::sumAllocated += nBytesToAllocate;
         return reinterpret_cast<ElementType*>( result );
     }
 
@@ -533,14 +729,29 @@ public:
                 std::size_t  nElementsAllocated )
     {
         auto const nBytesToAllocated = nElementsAllocated * sizeof( ElementType );
-        pool.deallocate( allocatedPointer, nBytesToAllocated );
+        m_pool->deallocate( allocatedPointer, nBytesToAllocated );
     }
 
-public:
-    inline static MemoryPool pool;
+    void
+    freeUnused()
+    {
+        m_pool->freeUnused();
+    }
 
-    /* Statistics */
-    inline static std::atomic<size_t> sumAllocated{ 0 };
+    [[nodiscard]] bool
+    operator==( const MmapAllocator& other ) const
+    {
+        return m_pool == other.m_pool;
+    }
+
+private:
+    //inline static MemoryPool<BucketWithLock<> > m_pool;
+
+    using Pool = MemoryPool<ThreadUnsafeBucket<ThreadUnsafeSlab> >;
+    inline static thread_local Pool m_threadLocalPool;
+    /** @todo this makes it thread unsafe again -.-"... thread_local storage is a dead end because the
+     * container can be used by different threads. */
+    Pool* m_pool{ &m_threadLocalPool };
 };
 
 
