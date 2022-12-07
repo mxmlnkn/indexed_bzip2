@@ -92,3 +92,24 @@ function createRandomWordsFile()
     #         Literal         : 0 (0 %)
     #         Back-References : 32767 (100 %)
 }
+
+
+size=$(( 30*1024 ))
+wordSize=24
+head -c $size /dev/urandom > random-words
+cat random-words > random-words-and-reversed
+echo 'AAAAAAAAAAAAAAAAAAAAAAAA' >> random-words-and-reversed
+echo 'BCBCBCBCBCBCBCBCBCBCBCBC' >> random-words-and-reversed
+echo 'DEFDEFDEFDEFDEFDEFDEFDEF' >> random-words-and-reversed
+echo 'GHIJGHIJGHIJGHIJGHIJGHIJ' >> random-words-and-reversed
+echo 'KLMNOPKLMNOPKLMNOPKLMNOP' >> random-words-and-reversed
+echo 'QRSTUVWXQRSTUVWXQRSTUVWX' >> random-words-and-reversed
+echo 'abcdefghabcdefghabcdefgh' >> random-words-and-reversed
+echo 'abcdefghijklabcdefghijkl' >> random-words-and-reversed
+for (( i=0; i<size; i += wordSize )); do
+    tail -c +$(( size - i - wordSize )) random-words | head -c "$wordSize" >> random-words-and-reversed
+done
+#hexdump -C random-words-and-reversed | head
+#hexdump -C random-words-and-reversed | tail
+igzip -0 -f -k random-words-and-reversed
+src/tools/rapidgzip --analyze random-words-and-reversed.gz

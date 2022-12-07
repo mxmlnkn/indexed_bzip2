@@ -71,3 +71,7 @@ target_sources(testInflateWrapper PRIVATE ${CMAKE_CURRENT_LIST_DIR}/testInflateW
 target_link_libraries(testInflateWrapper PRIVATE librapidgzip)
 add_test(NAME Test-Zlib COMMAND testInflateWrapper)
 add_dependencies(all_tests testInflateWrapper)
+
+add_executable(createTestFiles)
+target_sources(createTestFiles PRIVATE ${CMAKE_CURRENT_LIST_DIR}/createTestFiles.cpp)
+target_link_libraries(createTestFiles PRIVATE librapidgzip)
