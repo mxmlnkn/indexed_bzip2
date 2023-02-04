@@ -29,6 +29,11 @@ jobs:
         - os: ubuntu-latest
           manylinux-image: manylinux_2_28
           archs: auto64
+    env:
+      # https://cibuildwheel.readthedocs.io/en/stable/cpp_standards/#macos-and-deployment-target-versions
+      # 10.12 for std::shared_mutex
+      # 10.14 for <filesystem> (currently only used for the benchmarks and tests)
+      MACOSX_DEPLOYMENT_TARGET: "10.12"
 
     steps:
     - uses: actions/checkout@v3
