@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <shared_mutex>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -133,7 +134,7 @@ public:
     [[nodiscard]] size_t
     find( size_t encodedBlockOffsetInBits ) const override
     {
-        const std::scoped_lock lock( m_mutex );
+        const std::shared_lock lock( m_mutex );
 
         /* m_blockOffsets is effectively double-locked but that's the price of abstraction. */
         const auto lockedOffsets = m_blockOffsets.results();
@@ -196,7 +197,7 @@ private:
     }
 
 private:
-    mutable std::mutex m_mutex;  /**< Only variables accessed by the asynchronous main loop need to be locked. */
+    mutable std::shared_mutex m_mutex;  /**< Only variables accessed by the asynchronous main loop need to be locked. */
     std::condition_variable m_changed;
 
     StreamedResults<size_t> m_blockOffsets;

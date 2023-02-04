@@ -33,6 +33,9 @@ jobs:
           archs: auto32
 
     env:
+      # https://cibuildwheel.readthedocs.io/en/stable/cpp_standards/#macos-and-deployment-target-versions
+      # 10.12 for std::shared_mutex
+      # 10.14 for <filesystem> (currently only used for the benchmarks and tests)
       MACOSX_DEPLOYMENT_TARGET: "13.0"
 
     steps:
