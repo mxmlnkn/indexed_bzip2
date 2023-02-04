@@ -11,6 +11,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -698,7 +699,7 @@ private:
 
         ChunkConfiguration chunkDataConfiguration;
         {
-            const std::scoped_lock lock{ m_chunkConfigurationMutex };
+            const std::shared_lock lock{ m_chunkConfigurationMutex };
             chunkDataConfiguration = m_chunkConfiguration;
         }
         chunkDataConfiguration.fileType = m_blockFinder->fileType();
@@ -769,7 +770,7 @@ private:
 
     const bool m_isBgzfFile;
 
-    mutable std::mutex m_chunkConfigurationMutex;
+    mutable std::shared_mutex m_chunkConfigurationMutex;
     ChunkConfiguration m_chunkConfiguration;
 
     /* This is the highest found block inside BlockFinder we ever processed and put into the BlockMap.

@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -369,7 +370,7 @@ private:
     [[nodiscard]] bool
     isFailedPrefetch( const size_t blockOffset ) const
     {
-        const std::scoped_lock lock( m_failedPrefetchCacheMutex );
+        const std::shared_lock lock( m_failedPrefetchCacheMutex );
         return m_failedPrefetchCache.test( blockOffset );
     }
 
@@ -680,7 +681,7 @@ private:
     BlockCache m_cache;
     BlockCache m_prefetchCache;
     Cache</* block offset in bits */ size_t, bool> m_failedPrefetchCache;
-    mutable std::mutex m_failedPrefetchCacheMutex;
+    mutable std::shared_mutex m_failedPrefetchCacheMutex;
 
     std::map</* block offset */ size_t, std::future<BlockData> > m_prefetching;
     ThreadPool m_threadPool;

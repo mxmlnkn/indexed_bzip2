@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -43,7 +44,7 @@ private:
                       ? std::make_shared<AccessStatistics>()
                       : dynamic_cast<SharedFileReader*>( file )->m_statistics ),
         m_mutex( dynamic_cast<SharedFileReader*>( file ) == nullptr
-                 ? std::make_shared<std::mutex>()
+                 ? std::make_shared<std::shared_mutex>()
                  : dynamic_cast<SharedFileReader*>( file )->m_mutex ),
         m_fileSizeBytes( file == nullptr ? std::make_optional<size_t>( 0 ) : file->size() ),
         m_currentPosition( file == nullptr ? 0 : file->tell() )
@@ -167,7 +168,7 @@ public:
     [[nodiscard]] bool
     closed() const override
     {
-        const auto lock = getLock();
+        const auto lock = getReadLock();
         return !m_sharedFile || m_sharedFile->closed();
     }
 
@@ -182,7 +183,7 @@ public:
     [[nodiscard]] bool
     fail() const override
     {
-        const auto lock = getLock();
+        const auto lock = getReadLock();
         return !m_sharedFile || m_sharedFile->fail();
     }
 
@@ -193,7 +194,7 @@ public:
             return m_fileDescriptor;
         }
 
-        const auto lock = getLock();
+        const auto lock = getReadLock();
         if ( m_sharedFile ) {
             return m_sharedFile->fileno();
         }
@@ -304,7 +305,7 @@ public:
         } else
     #endif
         {
-            const auto fileLock = getLock();
+            const auto fileLock = getReadLock();
 
             if ( m_statistics && m_statistics->enabled ) {
                 const std::scoped_lock lock{ m_statistics->mutex };
@@ -365,7 +366,7 @@ public:
     struct FileLock
     {
         explicit
-        FileLock( std::mutex& mutex ) :
+        FileLock( std::shared_mutex& mutex ) :
             m_fileLock( mutex )
         {}
 
@@ -373,7 +374,7 @@ public:
     #ifdef WITH_PYTHON_SUPPORT
         const ScopedGILUnlock m_globalInterpreterUnlock;
     #endif
-        const std::unique_lock<std::mutex> m_fileLock;
+        const std::unique_lock<std::shared_mutex> m_fileLock;
     #ifdef WITH_PYTHON_SUPPORT
         const ScopedGILLock m_globalInterpreterLock;
     #endif
@@ -424,6 +425,15 @@ private:
         return std::make_unique<FileLock>( *m_mutex );
     }
 
+    [[nodiscard]] std::shared_lock<std::shared_mutex>
+    getReadLock() const
+    {
+        if ( m_statistics && m_statistics->enabled ) {
+            ++m_statistics->locks;
+        }
+        return std::shared_lock( *m_mutex );
+    }
+
 private:
     struct AccessStatistics {
         bool showProfileOnDestruction{ false };
@@ -442,7 +452,7 @@ private:
 
     std::shared_ptr<FileReader> m_sharedFile;
     int m_fileDescriptor{ -1 };
-    const std::shared_ptr<std::mutex> m_mutex;
+    const std::shared_ptr<std::shared_mutex> m_mutex;
 
     /** This is only for performance to avoid querying the file. */
     std::optional<size_t> m_fileSizeBytes;
