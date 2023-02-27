@@ -37,6 +37,8 @@ https://www.ietf.org/rfc/rfc1952.txt
 #include <BitReader.hpp>
 #include <blockfinder/Bgzf.hpp>
 #include <blockfinder/DynamicHuffman.hpp>
+#include <blockfinder/GzipHeader.hpp>
+#include <blockfinder/Uncompressed.hpp>
 #include <blockfinder/precodecheck/SingleCompressedLUT.hpp>
 #include <blockfinder/precodecheck/SingleLUT.hpp>
 #include <blockfinder/precodecheck/WalkTreeCompressedLUT.hpp>
@@ -44,6 +46,7 @@ https://www.ietf.org/rfc/rfc1952.txt
 #include <blockfinder/precodecheck/WithoutLUT.hpp>
 #include <common.hpp>
 #include <filereader/Buffered.hpp>
+#include <filereader/BufferView.hpp>
 #include <filereader/Standard.hpp>
 #include <huffman/HuffmanCodingCheckOnly.hpp>
 #include <precode.hpp>
@@ -1783,6 +1786,116 @@ findUncompressedDeflateBlocks( const BufferedFileReader::AlignedBuffer& buffer )
 }
 
 
+[[nodiscard]] std::vector<size_t>
+findUncompressedDeflateBlocksBitReader( const BufferedFileReader::AlignedBuffer& buffer )
+{
+    /* Thanks to BufferViewFileReader, the overhead for creating the BitReader is negligible:
+     * Creating BitReader took: 7e-07
+     * Finding in 128 MiB took: 0.028738 */
+    rapidgzip::BitReader bitReader( std::make_unique<BufferViewFileReader>( buffer.data(), buffer.size() ) );
+    std::vector<size_t> bitOffsets;
+    while ( true ) {
+        const auto [offsetStart, offsetEnd] =
+            rapidgzip::blockfinder::seekToNonFinalUncompressedDeflateBlock( bitReader );
+        if ( offsetEnd == std::numeric_limits<size_t>::max() ) {
+            break;
+        }
+        bitReader.seek( offsetEnd + 1 );
+        bitOffsets.emplace_back( offsetStart );
+    }
+    return bitOffsets;
+}
+
+
+[[nodiscard]] std::vector<size_t>
+findGzipHeader( const BufferedFileReader::AlignedBuffer& buffer )
+{
+    using namespace rapidgzip;
+
+    std::vector<size_t> bitOffsets;
+
+    uint32_t magicBytes{ 0 };
+    for ( size_t i = 0; i < 2; ++i ) {
+        magicBytes = ( magicBytes >> CHAR_BIT )
+                     | ( static_cast<uint32_t>( static_cast<uint8_t>( buffer[i] ) ) << 2U * CHAR_BIT );
+    }
+    for ( size_t i = 2; i + 1 < buffer.size(); ++i ) {
+        magicBytes = ( magicBytes >> CHAR_BIT )
+                     | ( static_cast<uint32_t>( static_cast<uint8_t>( buffer[i] ) ) << 2U * CHAR_BIT );
+        if ( LIKELY( magicBytes != gzip::MAGIC_BYTES_GZIP ) ) [[likely]] {
+            continue;
+        }
+
+        /* Check that the three uppermost flag bits, which are reserved, are 0. */
+        const auto flags = static_cast<uint8_t>( buffer[i + 1] );
+        if ( LIKELY( ( flags & 0b1110'0000ULL ) != 0ULL ) ) [[likely]] {
+            continue;
+        }
+
+        bitOffsets.push_back( ( i - 2 ) * CHAR_BIT );
+    }
+
+    return bitOffsets;
+}
+
+
+[[nodiscard]] std::vector<size_t>
+findGzipHeaderStringView( const BufferedFileReader::AlignedBuffer& buffer )
+{
+    using namespace rapidgzip;
+
+    static constexpr size_t MINIMUM_GZIP_SIZE = 3 /* gzip magic bytes */ + 1 /* flags */;
+    if ( buffer.size() < MINIMUM_GZIP_SIZE ) {
+        return {};
+    }
+
+    std::vector<size_t> bitOffsets;
+    static constexpr std::array<char, 3> MAGIC_BYTES_ARRAY = { '\x1F', '\x8B', '\x08' };
+    static const std::string_view MAGIC_BYTES( MAGIC_BYTES_ARRAY.data(), MAGIC_BYTES_ARRAY.size() );
+
+    const std::string_view stringBuffer( buffer.data(), buffer.size() );
+    for ( size_t i = 0; i < stringBuffer.size(); ++i ) {
+        i = stringBuffer.find( MAGIC_BYTES, i );
+        if ( i == std::string_view::npos ) {
+            break;
+        }
+        if ( i >= stringBuffer.size() - MAGIC_BYTES.size() + 1 /* flags */ ) {
+            break;
+        }
+
+        /* Check that the three uppermost flag bits, which are reserved, are 0. */
+        const auto flags = static_cast<uint8_t>( buffer[i + 3] );
+        if ( LIKELY( ( flags & 0b1110'0000ULL ) != 0ULL ) ) [[likely]] {
+            continue;
+        }
+
+        bitOffsets.push_back( i * CHAR_BIT );
+    }
+
+    return bitOffsets;
+}
+
+
+[[nodiscard]] std::vector<size_t>
+findGzipHeaderBitReader( const BufferedFileReader::AlignedBuffer& buffer )
+{
+    /* Thanks to BufferViewFileReader, the overhead for creating the BitReader is negligible:
+     * Creating BitReader took: 7e-07
+     * Finding in 128 MiB took: 0.028738 */
+    rapidgzip::BitReader bitReader( std::make_unique<BufferViewFileReader>( buffer.data(), buffer.size() ) );
+    std::vector<size_t> bitOffsets;
+    while ( true ) {
+        const auto offset = rapidgzip::blockfinder::seekToGzipStreamHeader( bitReader );
+        if ( offset == std::numeric_limits<size_t>::max() ) {
+            break;
+        }
+        bitReader.seek( offset + 1 );
+        bitOffsets.emplace_back( offset );
+    }
+    return bitOffsets;
+}
+
+
 void
 createRandomBase64( const std::string& filePath,
                     const size_t       fileSize )
@@ -1829,6 +1942,42 @@ formatBandwidth( const std::vector<double>& times,
 void
 benchmarkGzip( const std::string& fileName )
 {
+    {
+        const auto buffer = bufferFile( fileName, 128_Mi );
+        const auto [blockCandidates, durations] = benchmarkFunction<10>(
+            [&buffer] () { return findGzipHeaderStringView( buffer ); } );
+
+        std::cout << "[findGzipHeaderStringView] " << formatBandwidth( durations, buffer.size() ) << "\n";
+        std::cout << "    Block candidates (" << blockCandidates.size() << "): " << blockCandidates << "\n\n";
+    }
+
+    {
+        const auto buffer = bufferFile( fileName, 128_Mi );
+        const auto [blockCandidates, durations] = benchmarkFunction<10>(
+            [&buffer] () { return findGzipHeader( buffer ); } );
+
+        std::cout << "[findGzipHeader] " << formatBandwidth( durations, buffer.size() ) << "\n";
+        std::cout << "    Block candidates (" << blockCandidates.size() << "): " << blockCandidates << "\n\n";
+    }
+
+    {
+        const auto buffer = bufferFile( fileName, 128_Mi );
+        const auto [blockCandidates, durations] = benchmarkFunction<10>(
+            [&buffer] () { return findGzipHeaderBitReader( buffer ); } );
+
+        std::cout << "[findGzipHeaderBitReader] " << formatBandwidth( durations, buffer.size() ) << "\n";
+        std::cout << "    Block candidates (" << blockCandidates.size() << "): " << blockCandidates << "\n\n";
+    }
+
+    {
+        const auto buffer = bufferFile( fileName, 128_Mi );
+        const auto [blockCandidates, durations] = benchmarkFunction<10>(
+            [&buffer] () { return findUncompressedDeflateBlocksBitReader( buffer ); } );
+
+        std::cout << "[findUncompressedDeflateBlocksBitReader] " << formatBandwidth( durations, buffer.size() ) << "\n";
+        std::cout << "    Block candidates (" << blockCandidates.size() << "): " << blockCandidates << "\n\n";
+    }
+
     {
         const auto buffer = bufferFile( fileName, 128_Mi );
         const auto [blockCandidates, durations] = benchmarkFunction<10>(

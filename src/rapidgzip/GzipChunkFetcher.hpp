@@ -21,6 +21,7 @@
 #include <FasterVector.hpp>
 
 #include "blockfinder/DynamicHuffman.hpp"
+#include "blockfinder/GzipHeader.hpp"
 #include "blockfinder/Uncompressed.hpp"
 #include "ChunkData.hpp"
 #include "deflate.hpp"
@@ -708,7 +709,8 @@ public:
         }
 
         const auto tryToDecode =
-            [&] ( const std::pair<size_t, size_t>& offset ) -> std::optional<ChunkData>
+            [&] ( const std::pair<size_t, size_t>& offset,
+                  const std::optional<WindowView>  window ) -> std::optional<ChunkData>
             {
                 try {
                     /* For decoding, it does not matter whether we seek to offset.first or offset.second but it did
@@ -718,7 +720,7 @@ public:
                     ChunkData result;
                     result.setCRC32Enabled( crc32Enabled );
                     result.fileType = fileType;
-                    result = decodeBlockWithRapidgzip( &bitReader, untilOffset, /* initialWindow */ std::nullopt,
+                    result = decodeBlockWithRapidgzip( &bitReader, untilOffset, window,
                                                        maxDecompressedChunkSize, std::move( result ) );
                     result.encodedOffsetInBits = offset.first;
                     result.maxEncodedOffsetInBits = offset.second;
@@ -738,7 +740,7 @@ public:
         /* First simply try to decode at the current position to avoid expensive block finders in the case
          * that for some reason the @ref blockOffset guess was perfect. Note that this has to be added as
          * a separate stop condition for decoding the previous block! */
-        if ( auto result = tryToDecode( { blockOffset, blockOffset } ); result ) {
+        if ( auto result = tryToDecode( { blockOffset, blockOffset }, std::nullopt ); result ) {
             return *std::move( result );
         }
 
@@ -795,6 +797,24 @@ public:
                 return blockfinder::seekToNonFinalUncompressedDeflateBlock( bitReader, endOffset );
             };
 
+        const auto findNextGzipHeader =
+            [&] ( size_t beginOffset, size_t endOffset ) {
+                if ( beginOffset >= endOffset ) {
+                    return std::numeric_limits<size_t>::max();
+                }
+                bitReader.seek( beginOffset );
+                const auto streamStart = blockfinder::seekToGzipStreamHeader( bitReader, endOffset );
+                if ( streamStart == std::numeric_limits<size_t>::max() ) {
+                    return std::numeric_limits<size_t>::max();
+                }
+                bitReader.seek( streamStart );
+                const auto [header, error] = gzip::readHeader( bitReader );
+                if ( error != Error::NONE ) {
+                    return std::numeric_limits<size_t>::max();
+                }
+                return bitReader.tell();
+            };
+
         /**
          * @todo Add flag to BitReader like: "do not free memory". Or maybe, something to dynamically
          *       adjust the buffer size (to the offset range we are to analyze) to avoid buffer refills
@@ -837,15 +857,25 @@ public:
 
             auto uncompressedOffsetRange = findNextUncompressed( chunkBegin, chunkEnd );
             auto dynamicHuffmanOffset = findNextDynamic( chunkBegin, chunkEnd );
+            auto gzipHeaderOffset = findNextGzipHeader( chunkBegin, chunkEnd );
 
-            while ( ( uncompressedOffsetRange.first < chunkEnd ) || ( dynamicHuffmanOffset < chunkEnd ) ) {
+            while ( ( uncompressedOffsetRange.first < chunkEnd )
+                    || ( dynamicHuffmanOffset < chunkEnd )
+                    || ( gzipHeaderOffset < chunkEnd ) ) {
                 if ( cancelThreads ) {
                     break;
                 }
 
                 /* Choose the lower offset to test next. */
                 std::pair<size_t, size_t> offsetToTest;
-                if ( dynamicHuffmanOffset < uncompressedOffsetRange.first ) {
+                std::optional<WindowView> window;
+                if ( ( gzipHeaderOffset < dynamicHuffmanOffset )
+                     && ( gzipHeaderOffset < uncompressedOffsetRange.first ) )
+                {
+                    offsetToTest = { gzipHeaderOffset, gzipHeaderOffset };
+                    gzipHeaderOffset = findNextGzipHeader( gzipHeaderOffset + 1, chunkEnd );
+                    window = WindowView();  // No window required at gzip stream start
+                } else if ( dynamicHuffmanOffset < uncompressedOffsetRange.first ) {
                     offsetToTest = { dynamicHuffmanOffset, dynamicHuffmanOffset };
                     dynamicHuffmanOffset = findNextDynamic( dynamicHuffmanOffset + 1, chunkEnd );
                 } else {
@@ -855,7 +885,7 @@ public:
 
                 /* Try decoding and measure the time. */
                 const auto tBlockFinderStop = now();
-                if ( auto result = tryToDecode( offsetToTest ); result ) {
+                if ( auto result = tryToDecode( offsetToTest, window ); result ) {
                     result->blockFinderDuration = duration( tBlockFinderStart, tBlockFinderStop );
                     result->decodeDuration = duration( tBlockFinderStop );
                     result->falsePositiveCount = falsePositiveCount;
@@ -1268,6 +1298,12 @@ public:
                 didReadHeader = true;
                 block.emplace();
                 block->setInitialWindow();
+
+                /* Check for end condition because GzipStreamFinder should find the next block after this header. */
+                nextBlockOffset = bitReader->tell();
+                if ( nextBlockOffset >= untilOffset ) {
+                    break;
+                }
 
                 isAtStreamEnd = false;
             }
