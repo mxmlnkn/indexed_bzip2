@@ -477,14 +477,24 @@ rapidgzipCLI( int                  argc,
 
         auto errorCode = DecompressErrorCode::SUCCESS;
         size_t totalBytesRead{ 0 };
-        if ( ( outputFileDescriptor == -1 ) && args.indexSavePath.empty() && countBytes && !countLines
-             && !args.crc32Enabled )
-        {
-            /* Need to do nothing with the chunks because decompressParallel returns the decompressed size.
-             * Note that we use rapidgzip::ChunkDataCounter to speed up decompression. Therefore an index
-             * will not be created and there also will be no checksum verification! */
-            std::tie( errorCode, totalBytesRead ) = decompressParallel<rapidgzip::ChunkDataCounter>(
-                args, std::move( inputFile ), /* do nothing */ {} );
+        if ( ( outputFileDescriptor == -1 ) && args.indexSavePath.empty() && ( countBytes || countLines )
+             && !args.crc32Enabled ) {
+            if ( countLines ) {
+                const auto accumulateLineCount =
+                    [&newlineCount] ( const auto& chunkData, size_t, size_t )
+                    {
+                        newlineCount += chunkData->newlines;
+                    };
+
+                std::tie( errorCode, totalBytesRead ) = decompressParallel<rapidgzip::ChunkDataLineCounter>(
+                    args, std::move( inputFile ), accumulateLineCount );
+            } else {
+                /* Need to do nothing with the chunks because decompressParallel returns the decompressed size.
+                 * Note that we use rapidgzip::ChunkDataCounter to speed up decompression. Therefore an index
+                 * will not be created and there also will be no checksum verification! */
+                std::tie( errorCode, totalBytesRead ) = decompressParallel<rapidgzip::ChunkDataCounter>(
+                    args, std::move( inputFile ), /* do nothing */ {} );
+            }
         } else {
             std::function<void( const std::shared_ptr<rapidgzip::ChunkData>, size_t, size_t )> writeFunctor;
             /* Else, do nothing. An empty functor will lead to decompression to be skipped if the index is finalized! */

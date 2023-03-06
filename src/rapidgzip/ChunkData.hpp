@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <vector>
 
+#include <common.hpp>
 #include <crc32.hpp>
 #include <DecodedData.hpp>
 #include <gzip.hpp>
@@ -573,4 +574,244 @@ struct ChunkDataCounter final :
         return ChunkData::split( std::numeric_limits<size_t>::max() );
     }
 };
+
+
+/*
+m rapidgzip && src/tools/rapidgzip -P 0 --count-lines 4GiB-base64.gz
+
+    3483.22 MB/s
+    3446.68 MB/s
+    3459.95 MB/s
+    3502.57 MB/s
+
+/usr/bin/time -v src/tools/rapidgzip -P 0 --count-lines 4GiB-base64.gz
+
+Maximum resident set size (kbytes):
+
+    297336
+    295444
+    355828
+
+ChunkDataLineCounter that simply overrides "finalize" to effectively parallelize the line counting:
+
+    3422.66 MB/s
+    3363.2 MB/s
+    3478.95 MB/s
+    3447.23 MB/s
+    3355.52 MB/s
+
+
+ChunkDataLineCounter that counts inside toAppend and avoids the copy and append.
+(incorrect results because data with markers is ignored)
+
+    3736.6 MB/s
+    3735.14 MB/s
+    3675.92 MB/s
+    3637.4 MB/s
+    3714.03 MB/s
+
+    Maximum resident set size (kbytes): 81336 77632 78932 79548 80440
+
+
+ChunkDataLineCounter that counts using a histogram as is necessary
+for correct results while keeping the memory usage at a minimum.
+
+    3414.03 MB/s
+    3450.82 MB/s
+    3427.09 MB/s
+    3431.44 MB/s
+
+Maximum resident set size (kbytes):
+
+    100532
+    103620
+     98476
+
+55421473
+55778797
+*/
+
+#if 0
+
+/**
+ * Similar to @ref ChunkDataCounter but also counts lines.
+ *
+ * @note actually slower! Problem: To correctly convert the marker histogram into actual newline counts,
+ *       I need to actually keep window propagation correct! I.e. getWindowAt must not return an empty window!
+ *       Meaning, I have to keep the last WINDOW_SIZE bytes to return as window and to apply marker replacment in.
+ *       And in order to only keep the last WINDOW_SIZE and not more, I also have to adjust splitting to never split!
+ *       Note that something like this could also be used if only --export-index is specified!
+ * @todo Could work around the histogram by counting the fully decoded data and only create the histogram for the
+ *       data with markers. But this would be almost cheating. This definitely would require some worst case tests
+ *       like the random-words test case or maybe even Silesia, which also has plenty back-references.
+ */
+struct ChunkDataLineCounter :
+    public ChunkData
+{
+    void
+    append( deflate::DecodedVector&& toAppend )
+    {
+        decodedSizeInBytes += toAppend.size();
+
+        countSymbols( toAppend );
+    }
+
+    void
+    append( deflate::DecodedDataView const& toAppend )
+    {
+        decodedSizeInBytes += toAppend.size();
+
+        for ( const auto& container : toAppend.data ) {
+            countSymbols( container );
+        }
+        for ( const auto& container : toAppend.dataWithMarkers ) {
+            m_containsMarkers |= !container.empty();
+            countSymbols( container );
+        }
+    }
+
+    void
+    finalize( size_t blockEndOffsetInBits )
+    {
+        encodedSizeInBits = blockEndOffsetInBits - encodedOffsetInBits;
+        /* Do not overwrite decodedSizeInBytes like is done in the base class
+         * because DecodedData::size() would return 0! Instead, it is updated inside append. */
+    }
+
+    /**
+     * The internal index will only contain the offsets and empty windows but that is fine because
+     * this subclass does never require windows. The index should not be exported when this is used.
+     */
+    [[nodiscard]] deflate::DecodedVector
+    getWindowAt( WindowView const& /* previousWindow */,
+                 size_t            /* skipBytes */ ) const
+    {
+        return {};
+    }
+
+    template<typename Container>
+    void
+    countSymbols( const Container& container )
+    {
+        for ( const auto symbol : container ) {
+            symbolHistogram[symbol]++;
+        }
+        newlines = symbolHistogram['\n'];
+    }
+
+    [[nodiscard]] bool
+    containsMarkers() const noexcept
+    {
+        return m_containsMarkers;
+    }
+
+    void
+    applyWindow( WindowView const& window )
+    {
+        m_containsMarkers = false;
+    }
+
+public:
+    /**
+     * @note Could try to increase locality by splitting it into low 16-bit counts and high 64-bit counts,
+     * the latter of which would only need access very rarely, effectively shrinking the histogram size
+     * to cache 4-fold.
+     */
+    std::array<uint64_t, 1U << 16U> symbolHistogram{};
+    uint64_t newlines{ 0 };
+
+private:
+    bool m_containsMarkers{ false };
+};
+
+
+#elif 1
+/**
+ * Similar to @ref ChunkDataCounter but also counts lines.
+ *
+ * @note  +10% faster! (3.7-3.8 GB/s). AND of course less memory consumption
+ *        ( Maximum resident set size (kbytes): 21292 ). So really an ideal case ...
+ */
+struct ChunkDataLineCounter :
+    public ChunkData
+{
+    void
+    append( deflate::DecodedVector&& toAppend )
+    {
+        decodedSizeInBytes += toAppend.size();
+
+        countSymbols( toAppend );
+    }
+
+    void
+    append( deflate::DecodedDataView const& toAppend )
+    {
+        decodedSizeInBytes += toAppend.size();
+
+        for ( const auto& container : toAppend.data ) {
+            countSymbols( container );
+        }
+
+        /** @todo does not count toAppend.dataWithMarkers and therefore returns wrong results! */
+    }
+
+    void
+    finalize( size_t blockEndOffsetInBits )
+    {
+        encodedSizeInBits = blockEndOffsetInBits - encodedOffsetInBits;
+        /* Do not overwrite decodedSizeInBytes like is done in the base class
+         * because DecodedData::size() would return 0! Instead, it is updated inside append. */
+    }
+
+    /**
+     * The internal index will only contain the offsets and empty windows but that is fine because
+     * this subclass does never require windows. The index should not be exported when this is used.
+     */
+    [[nodiscard]] deflate::DecodedVector
+    getWindowAt( WindowView const& /* previousWindow */,
+                 size_t            /* skipBytes */ ) const
+    {
+        return {};
+    }
+
+    template<typename Container>
+    void
+    countSymbols( const Container& container )
+    {
+        newlines += ::countNewlines( { reinterpret_cast<const char*>( container.data() ), container.size() } );
+    }
+
+public:
+    uint64_t newlines{ 0 };
+};
+
+
+#else
+
+
+struct ChunkDataLineCounter :
+    public ChunkData
+{
+    void
+    finalize( size_t blockEndOffsetInBits )
+    {
+        ChunkData::finalize( blockEndOffsetInBits );
+        newlines = countNewlines();
+    }
+
+    [[nodiscard]] uint64_t
+    countNewlines() const
+    {
+        uint64_t result{ 0 };
+        for ( const auto& container : data ) {
+             result += ::countNewlines( { reinterpret_cast<const char*>( container.data() ), container.size() } );
+        }
+        return result;
+    }
+
+public:
+    uint64_t newlines{ 0 };
+};
+
+#endif
 }  // namespace rapidgzip
