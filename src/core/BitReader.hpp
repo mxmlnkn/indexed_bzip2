@@ -723,14 +723,21 @@ BitReader<MOST_SIGNIFICANT_BITS_FIRST, BitBuffer>::seek(
         break;
     }
 
-    offsetBits = std::clamp( offsetBits, 0LL, static_cast<long long int>( size() ) );
+    offsetBits = std::max( offsetBits, 0LL );
+    /* Beware, size() can return 0 for non-seekable files! */
+    if ( seekable() || ( size() > 0 ) ) {
+        offsetBits = std::min( offsetBits, static_cast<long long int>( size() ) );
+    }
 
     if ( static_cast<size_t>( offsetBits ) == tell() ) {
         return static_cast<size_t>( offsetBits );
     }
 
     if ( !seekable() && ( static_cast<size_t>( offsetBits ) < tell() ) ) {
-        throw std::invalid_argument( "File is not seekable!" );
+        std::stringstream message;
+        message << "File is not seekable! Requested to seek to " << formatBits( offsetBits )
+                << ". Currently at: " << formatBits( tell() );
+        throw std::invalid_argument( std::move( message ).str() );
     }
 
     /* Currently, buffer-only is not supported, use BufferedFileReader as a memory-only file reader! */
