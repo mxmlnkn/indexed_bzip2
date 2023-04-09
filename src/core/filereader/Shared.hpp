@@ -16,6 +16,7 @@
 #include <Statistics.hpp>
 
 #include "FileReader.hpp"
+#include "SinglePass.hpp"
 #ifndef _MSC_VER
     #include "Standard.hpp"
 #endif
@@ -383,5 +384,10 @@ ensureSharedFileReader( UniqueFileReader&& fileReader )
         fileReader.release();
         return std::unique_ptr<SharedFileReader>( casted );
     }
+
+    if ( !fileReader->seekable() ) {
+        return std::make_unique<SharedFileReader>( std::make_unique<SinglePassFileReader>( std::move( fileReader ) ) );
+    }
+
     return std::make_unique<SharedFileReader>( std::move( fileReader ) );
 }
