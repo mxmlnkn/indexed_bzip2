@@ -308,7 +308,7 @@ BZ2Reader::seek( long long int offset,
     switch ( origin )
     {
     case SEEK_CUR:
-        offset = tell() + offset;
+        offset += static_cast<long long int>( tell() );
         break;
     case SEEK_SET:
         break;
@@ -317,7 +317,7 @@ BZ2Reader::seek( long long int offset,
         if ( !m_blockToDataOffsetsComplete ) {
             read();
         }
-        offset = size() + offset;
+        offset += static_cast<long long int>( size() );
         break;
     }
 
