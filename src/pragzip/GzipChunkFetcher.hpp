@@ -135,13 +135,23 @@ public:
             }
 
             const auto nextBlockOffset = m_blockFinder->get( m_nextUnprocessedBlockIndex );
-            if ( !nextBlockOffset ) {
+
+            if ( const auto inputFileSize = m_bitReader.size();
+                 !nextBlockOffset || ( ( inputFileSize > 0 ) && ( *nextBlockOffset >= inputFileSize ) ) )
+            {
                 m_blockMap->finalize();
                 m_blockFinder->finalize();
                 return std::nullopt;
             }
 
             chunkData = getBlock( *nextBlockOffset, m_nextUnprocessedBlockIndex );
+
+            /* Should only happen when encountering EOF during decodeBlock call. */
+            if ( chunkData->encodedSizeInBits == 0 ) {
+                m_blockMap->finalize();
+                m_blockFinder->finalize();
+                return std::nullopt;
+            }
 
             const auto subblocks = chunkData->split( m_blockFinder->spacingInBits() / 8U );
             for ( const auto boundary : subblocks ) {
@@ -159,7 +169,9 @@ public:
              * points across the gzip footer and next header to the next deflate block. */
             const auto blockOffsetAfterNext = chunkData->encodedOffsetInBits + chunkData->encodedSizeInBits;
             m_blockFinder->insert( blockOffsetAfterNext );
-            if ( blockOffsetAfterNext >= m_bitReader.size() ) {
+            if ( const auto inputFileSize = m_bitReader.size();
+                 ( inputFileSize > 0 ) && ( blockOffsetAfterNext >= inputFileSize ) )
+            {
                 m_blockMap->finalize();
                 m_blockFinder->finalize();
             }
@@ -630,8 +642,7 @@ private:
                 assert( m_bitReader.tell() % BYTE_SIZE == 0 );
             }
 
-            m_stream.avail_in = m_bitReader.read(
-                m_buffer.data(), std::min( ( m_bitReader.size() - m_bitReader.tell() ) / BYTE_SIZE, m_buffer.size() ) );
+            m_stream.avail_in = m_bitReader.read( m_buffer.data(), m_buffer.size() );
             m_stream.next_in = reinterpret_cast<unsigned char*>( m_buffer.data() );
         }
 
@@ -805,7 +816,7 @@ private:
             throw std::invalid_argument( "BitReader must be non-null!" );
         }
 
-        const auto blockOffset = bitReader->tell();
+        const auto chunkOffset = bitReader->tell();
 
         /* If true, then read the gzip header. We cannot simply check the gzipHeader optional because we might
          * start reading in the middle of a gzip stream and will not meet the gzip header for a while or never. */
@@ -834,6 +845,9 @@ private:
                 const auto headerOffset = bitReader->tell();
                 const auto [header, error] = gzip::readHeader( *bitReader );
                 if ( error != Error::NONE ) {
+                    if ( error == Error::END_OF_FILE ) {
+                        break;
+                    }
                     std::stringstream message;
                     message << "Failed to read gzip header at offset " << formatBits( headerOffset )
                             << " because of error: " << toString( error );
@@ -855,8 +869,15 @@ private:
             nextBlockOffset = bitReader->tell();
 
             if ( auto error = block->readHeader( *bitReader ); error != Error::NONE ) {
+                /* Encountering EOF while reading the (first bit for the) deflate block header is only
+                 * valid if it is the very first deflate block given to us. Else, it should not happen
+                 * because the final block bit should be set in the previous deflate block. */
+                if ( ( error == Error::END_OF_FILE ) && ( bitReader->tell() == chunkOffset ) ) {
+                    break;
+                }
+
                 std::stringstream message;
-                message << "Failed to read deflate block header at offset " << formatBits( blockOffset )
+                message << "Failed to read deflate block header at offset " << formatBits( chunkOffset )
                         << " (position after trying: " << formatBits( bitReader->tell() ) << ": "
                         << toString( error );
                 throw std::domain_error( std::move( message ).str() );
@@ -889,7 +910,7 @@ private:
                 const auto [bufferViews, error] = block->read( *bitReader, std::numeric_limits<size_t>::max() );
                 if ( error != Error::NONE ) {
                     std::stringstream message;
-                    message << "Failed to decode deflate block at " << formatBits( blockOffset )
+                    message << "Failed to decode deflate block at " << formatBits( chunkOffset )
                             << " because of: " << toString( error );
                     throw std::domain_error( std::move( message ).str() );
                 }
