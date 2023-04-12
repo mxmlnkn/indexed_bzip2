@@ -124,7 +124,6 @@ public:
         {
             std::lock_guard lock( m_mutex );
             m_threadPoolRunning = false;
-            m_pingWorkers.notify_all();
         }
 
     #ifdef WITH_PYTHON_SUPPORT
@@ -134,6 +133,7 @@ public:
         const ScopedGILUnlock unlockedGIL;
     #endif
 
+        m_pingWorkers.notify_all();
         m_threads.clear();
     }
 
@@ -148,7 +148,7 @@ public:
     submit( T_Functor task,
             int       priority = 0 )
     {
-        std::lock_guard lock( m_mutex );
+        std::unique_lock lock( m_mutex );
 
         if ( m_threadCount == 0 ) {
             return std::async( std::launch::deferred, std::move( task ) );
@@ -164,6 +164,7 @@ public:
             spawnThread();
         }
 
+        lock.release();
         m_pingWorkers.notify_one();
 
         return resultFuture;
