@@ -96,20 +96,22 @@ public:
     void
     push( Value value )
     {
-        std::scoped_lock lock( m_mutex );
+        std::unique_lock lock( m_mutex );
 
         if ( m_finalized ) {
             throw std::invalid_argument( "You may not push to finalized StreamedResults!" );
         }
 
         m_results.emplace_back( std::move( value ) );
+
+        lock.release();
         m_changed.notify_all();
     }
 
     void
     finalize( std::optional<size_t> resultsCount = {} )
     {
-        std::scoped_lock lock( m_mutex );
+        std::unique_lock lock( m_mutex );
 
         if ( resultsCount ) {
             if ( *resultsCount > m_results.size() ) {
@@ -120,6 +122,8 @@ public:
         }
 
         m_finalized = true;
+
+        lock.release();
         m_changed.notify_all();
     }
 
@@ -140,10 +144,12 @@ public:
     void
     setResults( Values results )
     {
-        std::scoped_lock lock( m_mutex );
+        std::unique_lock lock( m_mutex );
 
         m_results = std::move( results );
         m_finalized = true;
+
+        lock.release();
         m_changed.notify_all();
     }
 

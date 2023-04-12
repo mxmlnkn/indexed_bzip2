@@ -44,9 +44,7 @@ public:
 
     ~BlockFinder()
     {
-        std::scoped_lock lock( m_mutex );
-        m_cancelThread = true;
-        m_changed.notify_all();
+        stopThreads();
     }
 
 public:
@@ -68,8 +66,8 @@ public:
         {
             std::scoped_lock lock( m_mutex );
             m_cancelThread = true;
-            m_changed.notify_all();
         }
+        m_changed.notify_all();
 
         if ( m_blockFinder && m_blockFinder->joinable() ) {
             m_blockFinder->join();
@@ -115,8 +113,8 @@ public:
         {
             std::scoped_lock lock( m_mutex );
             m_highestRequestedBlockNumber = std::max( m_highestRequestedBlockNumber, blockNumber );
-            m_changed.notify_all();
         }
+        m_changed.notify_all();
 
         return m_blockOffsets.get( blockNumber, timeoutInSeconds );
     }
