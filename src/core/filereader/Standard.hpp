@@ -132,14 +132,29 @@ public:
          * Because of this, it is not possible to simply use std::fseek. Because then, we would not be able to infer
          * whether we read past the end nor how many bytes we would have been able to read if the buffer was valid!
          */
+        #if 0
         const auto nBytesRead = buffer == nullptr
                                 ? std::min( nMaxBytesToRead, size() - tell() )
-                                : std::fread( buffer, /* element size */ 1, nMaxBytesToRead, m_file.get() );
+                                : std::fread( buffer, nMaxBytesToRead, 1, m_file.get() );
+        #else
+        size_t nBytesRead{ 0 };
+        if ( buffer == nullptr ) {
+            nBytesRead = std::min( nMaxBytesToRead, size() - tell() );
+        } else {
+            while ( nBytesRead < nMaxBytesToRead ) {
+                const auto nBytesReadPerCall = ::read( m_fileDescriptor, buffer + nBytesRead, nMaxBytesToRead - nBytesRead );
+                if ( nBytesReadPerCall <= 0 ) {
+                    break;
+                }
+                nBytesRead += nBytesReadPerCall;
+            }
+        }
+        #endif
         if ( buffer == nullptr ) {
             std::fseek( m_file.get(), static_cast<long>( nBytesRead ), SEEK_CUR );
         }
 
-        if ( nBytesRead == 0 ) {
+        if ( nBytesRead <= 0 ) {
         #if 1
             /* fread returning 0 might traditionally be a valid case if the file position was after the last byte.
              * EOF is only set after reading after the end not when the file position is at the end. */
@@ -233,6 +248,9 @@ private:
          * not being 0 in the case it has been seeked or read from somewhere else! */
         if ( m_seekable ) {
             StandardFileReader::seek( 0, SEEK_SET );
+        } else {
+            std::cerr << "setvbuf( f, (char *)NULL, _IONBF, 0 );\n";
+            setvbuf( fp(), (char *)NULL, _IONBF, 0 );
         }
     }
 
