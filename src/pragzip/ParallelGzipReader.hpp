@@ -211,6 +211,15 @@ public:
             }
         )
     {
+        /**
+         * pragzip && src/tools/pragzip -v -P 0 -d -o /dev/null <( cat 4GiB-base64.gz )
+         *  Decompressed in total 4294967296 B in 3.04164 s -> 1412.06 MB/s
+         * @todo Performance is more than half as slow!
+         *       Likely because the file reading cannot be fully parallelized with the decompression.
+         *       Simply reading the file with subsequent read calls takes ~1.5s!
+         *       We need to reduce locking inside SinglePass, I think. If that does not help, then also
+         *       add an extra read thread? Would add lots of complexity though.
+         */
         m_sharedFileReader->setStatisticsEnabled( ENABLE_STATISTICS && SHOW_PROFILE );
         if ( !m_bitReader.seekable() ) {
             throw std::invalid_argument( "Parallel BZ2 Reader will not work on non-seekable input like stdin (yet)!" );
