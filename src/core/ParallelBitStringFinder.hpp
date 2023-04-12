@@ -124,15 +124,13 @@ private:
         auto offsets = BaseType::findBitStrings( { buffer, bufferSizeInBytes }, bitStringToFind );
         std::sort( offsets.begin(), offsets.end() );
 
-        std::unique_lock lock( result->mutex );
+        std::lock_guard<std::mutex> lock( result->mutex );
         for ( const auto offset : offsets ) {
             if ( offset >= firstBitsToIgnore ) {
                 result->foundOffsets.push( bitOffsetToAdd + offset );
             }
         }
         result->foundOffsets.push( std::numeric_limits<size_t>::max() );
-
-        lock.release();
         result->changed.notify_one();
     }
 

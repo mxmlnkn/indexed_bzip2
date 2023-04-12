@@ -110,8 +110,8 @@ public:
         {
             std::lock_guard lock( m_mutex );
             m_threadPoolRunning = false;
+            m_pingWorkers.notify_all();
         }
-        m_pingWorkers.notify_all();
         m_threads.clear();
     }
 
@@ -126,7 +126,7 @@ public:
     submit( T_Functor task,
             int       priority = 0 )
     {
-        std::unique_lock lock( m_mutex );
+        std::lock_guard lock( m_mutex );
 
         /* Use a packaged task, which abstracts handling the return type and makes the task return void. */
         using ReturnType = decltype( std::declval<T_Functor>()() );
@@ -138,7 +138,6 @@ public:
             spawnThread();
         }
 
-        lock.release();
         m_pingWorkers.notify_one();
 
         return resultFuture;
