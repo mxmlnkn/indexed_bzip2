@@ -34,15 +34,27 @@
 #include "DecodedDataView.hpp"
 #include "definitions.hpp"
 #include "Error.hpp"
-#include "FixedHuffmanCoding.hpp"
 #include "gzip.hpp"
 #include "MarkerReplacement.hpp"
 
 
-namespace pragzip::deflate
+namespace pragzip
+{
+namespace deflate
 {
 using LiteralOrLengthHuffmanCoding =
     HuffmanCodingDoubleLiteralCached<uint16_t, MAX_CODE_LENGTH, uint16_t, MAX_LITERAL_HUFFMAN_CODE_COUNT>;
+
+/**
+ * Because the fixed Huffman coding is used by different threads it HAS TO BE immutable. It is constant anyway
+ * but it also MUST NOT have mutable members. This means that HuffmanCodingDoubleLiteralCached does NOT work
+ * because it internally saves the second symbol.
+ * @todo Make it such that the implementations can handle the case that the construction might result in
+ *       larger symbol values than are allowed to appear in the first place! I.e., cut-off construction there.
+ *       Note that changing this from 286 to 512, lead to an increase of the runtime! We need to reduce it again! */
+using FixedHuffmanCoding =
+    HuffmanCodingReversedBitsCached<uint16_t, MAX_CODE_LENGTH, uint16_t, MAX_LITERAL_OR_LENGTH_SYMBOLS + 2>;
+
 
 
 /**
@@ -151,6 +163,33 @@ using DistanceHuffmanCoding = HuffmanCodingReversedBitsCached<uint16_t, MAX_CODE
 
 /* Include 256 safety buffer so that we can avoid branches while filling. */
 using LiteralAndDistanceCLBuffer = std::array<uint8_t, MAX_LITERAL_OR_LENGTH_SYMBOLS + MAX_DISTANCE_SYMBOL_COUNT + 256>;
+
+
+[[nodiscard]] constexpr FixedHuffmanCoding
+createFixedHC()
+{
+    std::array<uint8_t, MAX_LITERAL_OR_LENGTH_SYMBOLS + 2> encodedFixedHuffmanTree{};
+    for ( size_t i = 0; i < encodedFixedHuffmanTree.size(); ++i ) {
+        if ( i < 144 ) {
+            encodedFixedHuffmanTree[i] = 8;
+        } else if ( i < 256 ) {
+            encodedFixedHuffmanTree[i] = 9;
+        } else if ( i < 280 ) {
+            encodedFixedHuffmanTree[i] = 7;
+        } else {
+            encodedFixedHuffmanTree[i] = 8;
+        }
+    }
+
+    FixedHuffmanCoding result;
+    const auto error = result.initializeFromLengths( { encodedFixedHuffmanTree.data(),
+                                                       encodedFixedHuffmanTree.size() } );
+    if ( error != Error::NONE ) {
+        throw std::logic_error( "Fixed Huffman Tree could not be created!" );
+    }
+
+    return result;
+}
 
 
 [[nodiscard]] constexpr uint16_t
@@ -465,7 +504,7 @@ public:
             return true;
 
         case CompressionType::FIXED_HUFFMAN:
-            return FIXED_HC.isValid();
+            return m_fixedHC.isValid();
 
         case CompressionType::DYNAMIC_HUFFMAN:
             return m_literalHC.isValid();
@@ -604,6 +643,10 @@ private:
      */
     uint8_t m_padding{ 0 };
 
+    /* Initializing m_fixedHC statically leads to very weird problems when compiling with ASAN.
+     * The code might be too complex and run into the static initialization order fiasco.
+     * But having this static const is very important to get a 10-100x speedup for finding deflate blocks! */
+    static constexpr FixedHuffmanCoding m_fixedHC = createFixedHC();
     LiteralOrLengthHuffmanCoding m_literalHC;
 
     DistanceHuffmanCoding m_distanceHC;
@@ -1012,7 +1055,7 @@ Block<ENABLE_STATISTICS>::readInternal( BitReader& bitReader,
     }
 
     if ( m_compressionType == CompressionType::FIXED_HUFFMAN ) {
-        return readInternalCompressed( bitReader, nMaxToDecode, window, FIXED_HC );
+        return readInternalCompressed( bitReader, nMaxToDecode, window, m_fixedHC );
     }
     return readInternalCompressed( bitReader, nMaxToDecode, window, m_literalHC );
 }
@@ -1196,4 +1239,5 @@ Block<ENABLE_STATISTICS>::setInitialWindow( VectorView<uint8_t> const& initialWi
     m_containsMarkerBytes = false;
     return;
 }
-}  // namespace pragzip::deflate
+}  // namespace deflate
+}  // namespace pragzip

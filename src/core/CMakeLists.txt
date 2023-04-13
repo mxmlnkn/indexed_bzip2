@@ -1,8 +1,8 @@
 add_subdirectory(filereader)
 
-add_library(core STATIC)
-target_include_directories(core PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_sources(core PRIVATE
+add_library(core INTERFACE)
+target_include_directories(core INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+target_sources(core INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/AffinityHelpers.hpp
     ${CMAKE_CURRENT_LIST_DIR}/AlignedAllocator.hpp
     ${CMAKE_CURRENT_LIST_DIR}/AtomicMutex.hpp
@@ -16,7 +16,6 @@ target_sources(core PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/Cache.hpp
     ${CMAKE_CURRENT_LIST_DIR}/common.hpp
     ${CMAKE_CURRENT_LIST_DIR}/FasterVector.hpp
-    ${CMAKE_CURRENT_LIST_DIR}/FileUtils.cpp
     ${CMAKE_CURRENT_LIST_DIR}/FileUtils.hpp
     ${CMAKE_CURRENT_LIST_DIR}/JoiningThread.hpp
     ${CMAKE_CURRENT_LIST_DIR}/ParallelBitStringFinder.hpp
@@ -26,5 +25,5 @@ target_sources(core PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/ThreadPool.hpp
     ${CMAKE_CURRENT_LIST_DIR}/VectorView.hpp
 )
-target_link_libraries(core PUBLIC Threads::Threads filereader)
-target_compile_features(core PUBLIC cxx_std_17)
+target_link_libraries(core INTERFACE Threads::Threads filereader)
+target_compile_features(core INTERFACE cxx_std_17)
