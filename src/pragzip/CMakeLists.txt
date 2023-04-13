@@ -7,16 +7,23 @@ target_include_directories(libpragzip INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_sources(libpragzip INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/crc32.hpp
     ${CMAKE_CURRENT_LIST_DIR}/ChunkData.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/DecodedData.cpp
     ${CMAKE_CURRENT_LIST_DIR}/DecodedData.hpp
     ${CMAKE_CURRENT_LIST_DIR}/DecodedDataView.hpp
     ${CMAKE_CURRENT_LIST_DIR}/definitions.hpp
     ${CMAKE_CURRENT_LIST_DIR}/deflate.hpp
     ${CMAKE_CURRENT_LIST_DIR}/Error.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/FixedHuffmanCoding.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/FixedHuffmanCoding.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/gzip.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gzip.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/GzipAnalyzer.cpp
     ${CMAKE_CURRENT_LIST_DIR}/GzipAnalyzer.hpp
     ${CMAKE_CURRENT_LIST_DIR}/GzipBlockFinder.hpp
     ${CMAKE_CURRENT_LIST_DIR}/GzipChunkFetcher.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/GzipReader.cpp
     ${CMAKE_CURRENT_LIST_DIR}/GzipReader.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/IndexFileFormat.cpp
     ${CMAKE_CURRENT_LIST_DIR}/IndexFileFormat.hpp
     ${CMAKE_CURRENT_LIST_DIR}/MarkerReplacement.hpp
     ${CMAKE_CURRENT_LIST_DIR}/ParallelGzipReader.hpp
