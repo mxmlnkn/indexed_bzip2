@@ -38,9 +38,7 @@ namespace pragzip
 /**
  * @note Calls to this class are not thread-safe! Even though they use threads to evaluate them in parallel.
  */
-template<typename T_ChunkData = ChunkData,
-         bool ENABLE_STATISTICS = false,
-         bool SHOW_PROFILE = false>
+template<typename T_ChunkData = ChunkData>
 class ParallelGzipReader final :
     public FileReader
 
@@ -55,8 +53,7 @@ public:
      * because the prefetch and cache units are very large and striding or backward accessing over multiple
      * megabytes should be extremely rare.
      */
-    using ChunkFetcher = pragzip::GzipChunkFetcher<FetchingStrategy::FetchMultiStream, ChunkData,
-                                                   ENABLE_STATISTICS, SHOW_PROFILE>;
+    using ChunkFetcher = pragzip::GzipChunkFetcher<FetchingStrategy::FetchMultiStream, ChunkData>;
     using BlockFinder = typename ChunkFetcher::BlockFinder;
     using BitReader = pragzip::BitReader;
     using WriteFunctor = std::function<void ( const std::shared_ptr<ChunkData>&, size_t, size_t )>;
@@ -220,7 +217,7 @@ public:
          *       We need to reduce locking inside SinglePass, I think. If that does not help, then also
          *       add an extra read thread? Would add lots of complexity though.
          */
-        m_sharedFileReader->setStatisticsEnabled( ENABLE_STATISTICS && SHOW_PROFILE );
+        //m_sharedFileReader->setStatisticsEnabled( ENABLE_STATISTICS && SHOW_PROFILE );
         if ( !m_bitReader.seekable() ) {
             throw std::invalid_argument( "Parallel BZ2 Reader will not work on non-seekable input like stdin (yet)!" );
         }
@@ -251,7 +248,7 @@ public:
 
     ~ParallelGzipReader()
     {
-        if constexpr ( SHOW_PROFILE ) {
+        if ( m_showProfileOnDestruct ) {
             std::cerr << "[ParallelGzipReader] Time spent:";
             std::cerr << "\n    Writing to output         : " << m_writeOutputTime << " s";
             std::cerr << "\n    Computing CRC32           : " << m_crc32Time << " s";
@@ -428,14 +425,14 @@ public:
 
             [[maybe_unused]] const auto tCRC32Start = now();
             processCRC32( chunkData, offsetInBlock, nBytesToDecode );
-            if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+            if ( m_enableStatistics ) {
                 m_crc32Time += duration( tCRC32Start );
             }
 
             if ( writeFunctor ) {
                 [[maybe_unused]] const auto tWriteStart = now();
                 writeFunctor( chunkData, offsetInBlock, nBytesToDecode );
-                if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+                if ( m_enableStatistics ) {
                     m_writeOutputTime += duration( tWriteStart );
                 }
             }
@@ -834,6 +831,10 @@ private:
     bool m_atEndOfFile = false;
 
     /** Benchmarking */
+
+    bool m_enableStatistics{ false };
+    bool m_showProfileOnDestruct{ false };
+
     double m_writeOutputTime{ 0 };
     double m_crc32Time{ 0 };
     uint64_t m_verifiedCRC32Count{ 0 };

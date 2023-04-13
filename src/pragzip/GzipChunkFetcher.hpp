@@ -51,16 +51,14 @@ public:
 
 
 template<typename T_FetchingStrategy,
-         typename T_ChunkData = ChunkData,
-         bool     ENABLE_STATISTICS = false,
-         bool     SHOW_PROFILE = false>
+         typename T_ChunkData = ChunkData>
 class GzipChunkFetcher :
-    public BlockFetcher<GzipBlockFinder, T_ChunkData, T_FetchingStrategy, ENABLE_STATISTICS, SHOW_PROFILE>
+    public BlockFetcher<GzipBlockFinder, T_ChunkData, T_FetchingStrategy>
 {
 public:
     using FetchingStrategy = T_FetchingStrategy;
     using ChunkData = T_ChunkData;
-    using BaseType = BlockFetcher<GzipBlockFinder, ChunkData, FetchingStrategy, ENABLE_STATISTICS, SHOW_PROFILE>;
+    using BaseType = BlockFetcher<GzipBlockFinder, ChunkData, FetchingStrategy>;
     using BitReader = pragzip::BitReader;
     using WindowView = VectorView<uint8_t>;
     using BlockFinder = typename BaseType::BlockFinder;
@@ -102,7 +100,7 @@ public:
         m_cancelThreads = true;
         this->stopThreadPool();
 
-        if constexpr ( SHOW_PROFILE ) {
+        if ( m_showProfileOnDestruct ) {
             std::stringstream out;
             out << "[GzipChunkFetcher::GzipChunkFetcher] First block access statistics:\n";
             out << "    Time spent in block finder          : " << m_blockFinderTime << " s\n";
@@ -112,6 +110,19 @@ public:
             out << "    Replaced marker bytes               : " << formatBytes( m_markerCount ) << "\n";
             std::cerr << std::move( out ).str();
         }
+    }
+
+    void
+    setShowProfileOnDestruct( bool flag )
+    {
+        m_showProfileOnDestruct = flag;
+        m_enableStatistics |= flag;
+    }
+
+    void
+    enableStatistics( bool flag )
+    {
+        m_enableStatistics = flag;
     }
 
     /**
@@ -158,7 +169,7 @@ public:
                 m_blockMap->push( boundary.encodedOffset, boundary.encodedSize, boundary.decodedSize );
             }
 
-            if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+            if ( m_enableStatistics ) {
                 std::scoped_lock lock( m_statisticsMutex );
                 m_blockFinderTime += chunkData->blockFinderDuration;
                 m_decodeTime += chunkData->decodeDuration;
@@ -326,7 +337,7 @@ private:
         [[maybe_unused]] const auto markerCount = chunkData->dataWithMarkersSize();
         [[maybe_unused]] const auto tApplyStart = now();
         chunkData->applyWindow( previousWindow );
-        if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+        if ( m_enableStatistics ) {
             std::scoped_lock lock( m_statisticsMutex );
             if ( markerCount > 0 ) {
                 m_applyWindowTime += duration( tApplyStart );
@@ -954,6 +965,9 @@ private:
     }
 
 private:
+    bool m_enableStatistics{ false };
+    bool m_showProfileOnDestruct{ false };
+
     /* Members for benchmark statistics */
     double m_applyWindowTime{ 0 };
     double m_blockFinderTime{ 0 };

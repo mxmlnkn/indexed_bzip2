@@ -31,9 +31,7 @@
  */
 template<typename T_BlockFinder,
          typename T_BlockData,
-         typename FetchingStrategy,
-         bool     ENABLE_STATISTICS = false,
-         bool     SHOW_PROFILE = false>
+         typename FetchingStrategy>
 class BlockFetcher
 {
 public:
@@ -185,7 +183,7 @@ protected:
             throw std::invalid_argument( "BlockFinder must be valid!" );
         }
 
-        if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+        if ( m_enableStatistics ) {
             m_statistics.parallelization = m_parallelization;
         }
     }
@@ -194,7 +192,7 @@ public:
     virtual
     ~BlockFetcher()
     {
-        if constexpr ( SHOW_PROFILE ) {
+        if ( m_showProfileOnDestruct ) {
             /* Clear caches while updating the unused entries statistic. */
             m_cache.shrinkTo( 0 );
             m_prefetchCache.shrinkTo( 0 );
@@ -237,7 +235,7 @@ public:
         const auto validDataBlockIndex = dataBlockIndex ? *dataBlockIndex : m_blockFinder->find( blockOffset );
         const auto nextBlockOffset = m_blockFinder->get( validDataBlockIndex + 1 );
 
-        if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+        if ( m_enableStatistics ) {
             m_statistics.recordBlockIndexGet( validDataBlockIndex );
         }
 
@@ -260,7 +258,7 @@ public:
         /* Return result */
         if ( cachedResult.has_value() ) {
             assert( !queuedResult.valid() );
-            if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+            if ( m_enableStatistics ) {
                 std::scoped_lock lock( m_analyticsMutex );
                 m_statistics.getTotalTime += duration( tGetStart );
             }
@@ -278,7 +276,7 @@ public:
 
         insertIntoCache( blockOffset, result );
 
-        if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+        if ( m_enableStatistics ) {
             std::scoped_lock lock( m_analyticsMutex );
             m_statistics.futureWaitTotalTime += futureGetDuration;
             m_statistics.getTotalTime += duration( tGetStart );
@@ -291,6 +289,19 @@ public:
     clearCache()
     {
         m_cache.clear();
+    }
+
+    void
+    setShowProfileOnDestruct( bool flag )
+    {
+        m_showProfileOnDestruct = flag;
+        m_enableStatistics |= flag;
+    }
+
+    void
+    enableStatistics( bool flag )
+    {
+        m_enableStatistics = flag;
     }
 
     [[nodiscard]] Statistics
@@ -374,7 +385,7 @@ private:
             m_prefetching.erase( match );
             assert( resultFuture.valid() );
 
-            if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+            if ( m_enableStatistics ) {
                 ++m_statistics.prefetchDirectHits;
             }
         }
@@ -483,7 +494,7 @@ private:
                     && !nextPrefetchBlockOffset && ( nextPrefetchGetReturnCode != GetReturnCode::FAILURE )
                     && !stopPrefetching() );
 
-            if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+            if ( m_enableStatistics ) {
                 if ( !prefetchBlockOffset.has_value() ) {
                     m_statistics.waitOnBlockFinderCount++;
                 }
@@ -534,7 +545,7 @@ private:
     submitOnDemandTask( const size_t                blockOffset,
                         const std::optional<size_t> nextBlockOffset )
     {
-        if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+        if ( m_enableStatistics ) {
             ++m_statistics.onDemandFetchCount;
         }
         auto resultFuture = m_threadPool.submit( [this, blockOffset, nextBlockOffset] () {
@@ -587,7 +598,7 @@ private:
     {
         [[maybe_unused]] const auto tDecodeStart = now();
         auto blockData = decodeBlock( blockOffset, nextBlockOffset );
-        if constexpr ( ENABLE_STATISTICS || SHOW_PROFILE ) {
+        if ( m_enableStatistics ) {
             const auto tDecodeEnd = now();
 
             std::scoped_lock lock( this->m_analyticsMutex );
@@ -615,6 +626,9 @@ protected:
 
 private:
     const size_t m_parallelization;
+
+    bool m_enableStatistics{ false };
+    bool m_showProfileOnDestruct{ false };
 
     /**
      * The block finder is used to prefetch blocks among others.
