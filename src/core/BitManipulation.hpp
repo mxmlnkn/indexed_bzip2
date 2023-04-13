@@ -203,9 +203,18 @@ createReversedBitsLUT()
     static_assert( std::is_unsigned_v<T> && std::is_integral_v<T> );
 
     std::array<T, 1ULL << std::numeric_limits<T>::digits> result{};
-    for ( size_t i = 0; i < result.size(); ++i ) {
+    constexpr auto byteLUTSize = std::min( static_cast<size_t>( std::numeric_limits<uint8_t>::max() ), result.size() );
+    for ( size_t i = 0; i <= byteLUTSize; ++i ) {
         result[i] = reverseBitsWithoutLUT( static_cast<T>( i ) );
     }
+
+    for ( size_t i = std::numeric_limits<uint8_t>::max(); i < result.size(); ++i ) {
+        for ( size_t j = 0; j < std::numeric_limits<T>::digits; j += 8U ) {
+            const auto byte = ( i >> j ) & 0xFFU;
+            result[i] = ( result[i] << 8U ) | result[byte];
+        }
+    }
+
     return result;
 }
 
