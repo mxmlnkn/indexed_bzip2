@@ -711,6 +711,41 @@ testCachedChunkReuseAfterSplit()
 
 
 void
+testOnDemandFetchesAfterPreemptiveStop()
+{
+    /* This compresses with a compression ratio of ~1028! I.e. even for 1 GiB, there will be only one chunk
+     * even with a comparatively small chunk size of 1 MiB. */
+    const auto compressedZeros = compressWithZlib( std::vector<std::byte>( 128_Mi, std::byte( 0 ) ) );
+    rapidgzip::ParallelGzipReader<rapidgzip::ChunkData, /* ENABLE_STATISTICS */ true> reader(
+        std::make_unique<BufferViewFileReader>( compressedZeros ), /* parallelization */ 8, /* chunk size */ 1_Mi );
+    reader.setCRC32Enabled( true );
+    reader.setMaxDecompressedChunkSize( 20_Mi );
+
+    /* This read will result in an on-demand chunk fetch but that chunk will only decompress 20 MiB of data!
+     * And then, the algorithm will try to split the 20 MiB chunk into 1 MiB parts.
+     * However, it only has 4 deflate block boundaries because of the huge compression ratio and therefore
+     * gets only split into 5 subblocks. The subblocks get inserted into the block finder and the block indexes
+     * in the prefetcher get updated and for the split index all smaller ones are inserted. */
+    reader.read( -1, nullptr, 16_Mi );
+    REQUIRE_EQUAL( reader.statistics().onDemandFetchCount, 1U );
+
+    /* The next 4 accesses will reuse the cached (subdivided) chunks.
+     * @todo Currently, these direct cache accesses to split blocks do not trigger any prefetching resulting
+     *       in an on-demand fetch on the 5th access! This is because GzipChunkFetcher::get handles accesses
+     *       to split blocks specially to avoid fetch patterns such as [0 1 2 3 4] 2 where the bracketed part
+     *       is an index that has been split but has not been fully processed. */
+    for ( size_t i = 0; i < 5; ++i ) {
+        std::cerr << "Read 1 MiB\n";
+        const auto nBytesRead = reader.read( -1, nullptr, 1_Mi );
+        REQUIRE_EQUAL( reader.statistics().onDemandFetchCount, 1U );
+        if ( nBytesRead == 0 ) {
+            break;
+        }
+    }
+}
+
+
+void
 testPrefetchingAfterSplit()
 {
     static constexpr size_t DATA_SIZE = 64_Mi;
@@ -927,6 +962,12 @@ main( int    argc,
         static_cast<std::filesystem::path>(
             findParentFolderContaining( binaryFolder, "src/tests/data/base64-256KiB.bgz" )
         ) / "src" / "tests" / "data";
+
+    testOnDemandFetchesAfterPreemptiveStop();
+
+    std::cout << "Tests successful: " << ( gnTests - gnTestErrors ) << " / " << gnTests << "\n";
+
+    return gnTestErrors == 0 ? 0 : 1;
 
     testMultiThreadedUsage();
     testCRC32AndCleanUnmarkedData();
