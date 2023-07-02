@@ -573,11 +573,14 @@ private:
         chunkData->applyWindow( previousWindow );
 
         const auto t0 = now();
+        auto bitReader = m_bitReader;
         size_t decodedOffsetInBlock{ 0 };
         for ( auto& subchunk : chunkData->subchunks ) {
+            bitReader.seek( subchunk.encodedOffset );
             decodedOffsetInBlock += subchunk.decodedSize;
             subchunk.window = std::make_shared<WindowMap::Window>(
-                chunkData->getWindowAt( previousWindow, decodedOffsetInBlock ), windowCompressionType );
+                deflate::getSparseWindow( bitReader, chunkData->getWindowAt( previousWindow, decodedOffsetInBlock ) ),
+                windowCompressionType );
         }
         chunkData->statistics.compressWindowDuration += duration( t0 );
     }
