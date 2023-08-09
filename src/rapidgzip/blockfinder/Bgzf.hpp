@@ -139,6 +139,7 @@ public:
     [[nodiscard]] static bool
     isBgzfFile( const UniqueFileReader& file )
     {
+        return false;
         const auto oldPos = file->tell();
 
         HeaderBytes header;
@@ -166,6 +167,7 @@ public:
     [[nodiscard]] static bool
     isBgzfHeader( const HeaderBytes& header )
     {
+        return false;
         return    ( header[ 0] == 0x1F )
                && ( header[ 1] == 0x8B )
                && ( header[ 2] == 0x08 )

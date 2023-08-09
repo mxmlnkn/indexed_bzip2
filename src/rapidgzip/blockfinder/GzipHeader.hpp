@@ -33,6 +33,11 @@ seekToGzipStreamHeader( BitReader&   bitReader,
         const auto startOffset = bitReader.tell();
         /* Align to byte because we begin checking there instead of the deflate magic bits. */
         const auto startOffsetByte = ceilDiv( startOffset, BYTE_SIZE ) * BYTE_SIZE;
+
+            if ( startOffset == 4194304 * 8 ) {
+                std::cerr << "Given offset " << formatBits( startOffset ) << " start at " << formatBits( startOffsetByte ) << ", until offset: " << formatBits( untilOffset ) << "\n";
+            }
+
         if ( startOffsetByte < untilOffset ) {
             bitReader.seek( static_cast<long long int>( startOffsetByte ) );
         }
@@ -43,6 +48,10 @@ seekToGzipStreamHeader( BitReader&   bitReader,
         }
         for ( size_t offset = startOffsetByte; offset < untilOffset; offset += BYTE_SIZE ) {
             magicBytes = ( magicBytes >> BYTE_SIZE ) | ( bitReader.read<BYTE_SIZE>() << 2U * BYTE_SIZE );
+            if ( offset == 4194317 * 8 ) {
+                std::cerr << "Magic bytes at 4194317 B are 0x" << std::hex << magicBytes << std::dec << "\n";
+            }
+
             if ( LIKELY( magicBytes != gzip::MAGIC_BYTES_GZIP ) ) [[likely]] {
                 continue;
             }

@@ -812,6 +812,13 @@ public:
                 if ( error != Error::NONE ) {
                     return std::numeric_limits<size_t>::max();
                 }
+
+                if ( beginOffset >= 4194304 * 8 && beginOffset <= 4243648 * 8 ) {
+                    std::stringstream msg;
+                    msg << "[" << std::this_thread::get_id() << "] Found gzip header candidate: " << formatBits( bitReader.tell() ) << ", blockOffset: " << formatBits( blockOffset ) << ", beginOffset: " << formatBits( beginOffset ) << "\n";
+                    std::cerr << std::move( msg ).str();
+                }
+
                 return bitReader.tell();
             };
 
@@ -859,6 +866,12 @@ public:
             auto dynamicHuffmanOffset = findNextDynamic( chunkBegin, chunkEnd );
             auto gzipHeaderOffset = findNextGzipHeader( chunkBegin, chunkEnd );
 
+            if ( chunkBegin >= 4194290 * 8 && chunkBegin <= 4243648 * 8 && gzipHeaderOffset != std::numeric_limits<size_t>::max() ) {
+                std::stringstream msg;
+                msg << "Found very first gzip header candidate: " << formatBits( gzipHeaderOffset ) << "\n";
+                std::cerr << std::move( msg ).str();
+            }
+
             while ( ( uncompressedOffsetRange.first < chunkEnd )
                     || ( dynamicHuffmanOffset < chunkEnd )
                     || ( gzipHeaderOffset < chunkEnd ) ) {
@@ -885,6 +898,11 @@ public:
 
                 /* Try decoding and measure the time. */
                 const auto tBlockFinderStop = now();
+                if ( chunkBegin >= 4194290 * 8 && chunkBegin <= 4243648 * 8 ) {
+                    std::stringstream msg;
+                    msg << " Test with offset: " << formatBits( offsetToTest.first ) << "\n";
+                    std::cerr << std::move( msg ).str();
+                }
                 if ( auto result = tryToDecode( offsetToTest, window ); result ) {
                     result->blockFinderDuration = duration( tBlockFinderStart, tBlockFinderStop );
                     result->decodeDuration = duration( tBlockFinderStop );
@@ -1302,6 +1320,14 @@ public:
                 /* Check for end condition because GzipStreamFinder should find the next block after this header. */
                 nextBlockOffset = bitReader->tell();
                 if ( nextBlockOffset >= untilOffset ) {
+
+                    if ( nextBlockOffset >= 4194304 * 8 && nextBlockOffset <= 4243648 * 8 ) {
+                        std::stringstream msg;
+                        msg << "Break decompress loop because gzip stream header end is inside next chunk: "
+                            << formatBits( nextBlockOffset ) << "\n";
+                        std::cerr << std::move( msg ).str();
+                    }
+
                     break;
                 }
 
