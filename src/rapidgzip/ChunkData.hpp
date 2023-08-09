@@ -53,6 +53,12 @@ struct ChunkData :
         }
     };
 
+    struct Header
+    {
+        BlockBoundary blockBoundary;
+        gzip::Header gzipHeader;
+    };
+
     struct Footer
     {
         /**
@@ -254,6 +260,17 @@ public:
     }
 
     void
+    appendHeader( const size_t encodedOffset,
+                  const size_t decodedOffset,
+                  gzip::Header header )
+    {
+        typename ChunkData::Header headerResult;
+        headerResult.blockBoundary = { encodedOffset, decodedOffset };
+        headerResult.gzipHeader = std::move( header );
+        headers.emplace_back( headerResult );
+    }
+
+    void
     setCRC32Enabled( bool enabled )
     {
         for ( auto& calculator : crc32s ) {
@@ -281,6 +298,7 @@ public:
      * during first-pass decompression. */
     std::vector<BlockBoundary> blockBoundaries;
     std::vector<Footer> footers;
+    std::vector<Header> headers;
     /* There will be ( footers.size() + 1 ) CRC32 calculators. */
     std::vector<CRC32Calculator> crc32s{ std::vector<CRC32Calculator>( 1 ) };
 
