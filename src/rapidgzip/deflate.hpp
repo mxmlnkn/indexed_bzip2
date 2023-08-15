@@ -26,7 +26,6 @@
 #include <BitReader.hpp>
 //#include <huffman/HuffmanCodingDoubleLiteralCached.hpp>
 //#include <huffman/HuffmanCodingDistanceISAL.hpp>
-#include <huffman/DistanceCodingOnlyBitCount.hpp>
 #include <huffman/HuffmanCodingISAL.hpp>
 //#include <huffman/HuffmanCodingLinearSearch.hpp>
 #include <huffman/HuffmanCodingSymbolsPerLength.hpp>
@@ -208,9 +207,8 @@ using PrecodeHuffmanCoding = HuffmanCodingReversedBitsCachedCompressed<uint8_t, 
  * -> ISA-l is actually slightly (~1-2%) slower than my own simple distance Huffman decoder.
  *    Probably because the table is small enough that short/long caching hinders performance more than it helps.
  **/
-//using DistanceHuffmanCoding = HuffmanCodingReversedBitsCached<uint16_t, MAX_CODE_LENGTH,
-//                                                              uint8_t, MAX_DISTANCE_SYMBOL_COUNT>;
-using DistanceHuffmanCoding = deflate::DistanceCodingOnlyBitCount<uint16_t, MAX_CODE_LENGTH, uint8_t, MAX_DISTANCE_SYMBOL_COUNT>;
+using DistanceHuffmanCoding = HuffmanCodingReversedBitsCached<uint16_t, MAX_CODE_LENGTH,
+                                                              uint8_t, MAX_DISTANCE_SYMBOL_COUNT>;
 
 /* Include 256 safety buffer so that we can avoid branches while filling. */
 using LiteralAndDistanceCLBuffer = std::array<uint8_t, MAX_LITERAL_OR_LENGTH_SYMBOLS + MAX_DISTANCE_SYMBOL_COUNT + 256>;
@@ -1134,25 +1132,6 @@ Block<ENABLE_STATISTICS>::resolveBackreference( Window&        window,
         }
     }
 
-    /**
-     * With normal resolving:
-     *     20xsilesia.tar.gz         -> 405 MB/s
-     *     10xSRR22403185_2.fastq.gz -> 455 MB/s
-     * Introducing a return here to effectively disable reference resolving leads to:
-     *     20xsilesia.tar.gz         -> 468 MB/s
-     *     10xSRR22403185_2.fastq.gz -> 525 MB/s
-     * Without resolving and with reduced distance getter. Note that I can't disable the distance HC completely
-     * because we need to know how many bits to skip. I think using the distance HC from ISA-l might yield some
-     * small improvements.
-     *     20xsilesia.tar.gz         -> 473 MB/s
-     *     10xSRR22403185_2.fastq.gz -> 570 MB/s
-     * With extra bits merged into distance coding so that we can skip over distances easier.
-     *     20xsilesia.tar.gz         -> 510 MB/s
-     *     10xSRR22403185_2.fastq.gz -> 595 MB/s
-     * Igzip:
-     *     20xsilesia.tar.gz         -> 850 MB/s
-     *     10xSRR22403185_2.fastq.gz -> 980 MB/s
-     */
     constexpr bool containsMarkerBytes = std::is_same_v<std::decay_t<decltype( *window.data() ) >, uint16_t>;
 
     const auto offset = ( m_windowPosition + window.size() - distance ) % window.size();
@@ -1429,15 +1408,19 @@ Block<ENABLE_STATISTICS>::readInternalCompressedIsal
                 if constexpr ( ENABLE_STATISTICS ) {
                     symbolTypes.copies += length;
                 }
+
+                const auto [distance, error] = getDistance( bitReader );
+                if ( error != Error::NONE ) {
+                    return { nBytesRead, error };
                 }
 
                 if constexpr ( !containsMarkerBytes ) {
-                    if ( *distance > m_decodedBytes + nBytesRead ) {
+                    if ( distance > m_decodedBytes + nBytesRead ) {
                         return { nBytesRead, Error::EXCEEDED_WINDOW_RANGE };
                     }
                 }
 
-                resolveBackreference( window, length /* *distance */, length, nBytesRead );
+                resolveBackreference( window, distance, length );
                 nBytesRead += length;
             }
         }
