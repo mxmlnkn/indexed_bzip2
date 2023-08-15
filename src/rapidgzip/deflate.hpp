@@ -26,7 +26,6 @@
 #include <BitReader.hpp>
 //#include <huffman/HuffmanCodingDoubleLiteralCached.hpp>
 //#include <huffman/HuffmanCodingDistanceISAL.hpp>
-#include <huffman/DistanceCoding.hpp>
 #include <huffman/DistanceCodingOnlyBitCount.hpp>
 #include <huffman/HuffmanCodingISAL.hpp>
 //#include <huffman/HuffmanCodingLinearSearch.hpp>
@@ -211,8 +210,7 @@ using PrecodeHuffmanCoding = HuffmanCodingReversedBitsCachedCompressed<uint8_t, 
  **/
 //using DistanceHuffmanCoding = HuffmanCodingReversedBitsCached<uint16_t, MAX_CODE_LENGTH,
 //                                                              uint8_t, MAX_DISTANCE_SYMBOL_COUNT>;
-using DistanceHuffmanCoding = deflate::DistanceCoding<uint16_t, MAX_CODE_LENGTH, uint8_t, MAX_DISTANCE_SYMBOL_COUNT>;
-//using DistanceHuffmanCoding = deflate::DistanceCodingOnlyBitCount<uint16_t, MAX_CODE_LENGTH, uint8_t, MAX_DISTANCE_SYMBOL_COUNT>;
+using DistanceHuffmanCoding = deflate::DistanceCodingOnlyBitCount<uint16_t, MAX_CODE_LENGTH, uint8_t, MAX_DISTANCE_SYMBOL_COUNT>;
 
 /* Include 256 safety buffer so that we can avoid branches while filling. */
 using LiteralAndDistanceCLBuffer = std::array<uint8_t, MAX_LITERAL_OR_LENGTH_SYMBOLS + MAX_DISTANCE_SYMBOL_COUNT + 256>;
