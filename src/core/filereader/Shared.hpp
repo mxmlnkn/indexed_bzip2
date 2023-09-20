@@ -162,8 +162,8 @@ public:
     [[nodiscard]] bool
     closed() const override
     {
-        const auto lock = getLock();
-        return !m_sharedFile || m_sharedFile->closed();
+        const auto sharedFile = m_sharedFile;
+        return !sharedFile || sharedFile->closed();
     }
 
     [[nodiscard]] bool
@@ -177,8 +177,8 @@ public:
     [[nodiscard]] bool
     fail() const override
     {
-        const auto lock = getLock();
-        return !m_sharedFile || m_sharedFile->fail();
+        const auto sharedFile = m_sharedFile;
+        return !sharedFile || sharedFile->fail();
     }
 
     [[nodiscard]] int
@@ -188,9 +188,9 @@ public:
             return m_fileDescriptor;
         }
 
-        const auto lock = getLock();
-        if ( m_sharedFile ) {
-            return m_sharedFile->fileno();
+        const auto sharedFile = m_sharedFile;
+        if ( sharedFile ) {
+            return sharedFile->fileno();
         }
         throw std::invalid_argument( "Invalid or closed SharedFileReader has no associated fileno!" );
     }
@@ -208,8 +208,11 @@ public:
             return m_fileSizeBytes;
         }
 
-        const auto lock = getLock();
-        return m_sharedFile ? m_sharedFile->size() : std::nullopt;
+        /* Copy shared file so that we do not need to lock even though @ref close may call "reset" on m_sharedFile
+         * between the nullptr test and the dereferencing. No lock is necessary for the method call itself because
+         * it is const. */
+        const auto sharedFile = m_sharedFile;
+        return sharedFile ? sharedFile->size() : std::nullopt;
     }
 
     size_t
