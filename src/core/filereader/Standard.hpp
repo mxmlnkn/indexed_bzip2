@@ -249,6 +249,8 @@ private:
          * not being 0 in the case it has been seeked or read from somewhere else! */
         if ( m_seekable ) {
             StandardFileReader::seek( 0, SEEK_SET );
+        } else {
+            setvbuf( fp(), (char *)NULL, _IONBF, 0 );
         }
     }
 
