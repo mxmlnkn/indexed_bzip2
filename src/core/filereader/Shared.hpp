@@ -240,10 +240,6 @@ public:
     read( char*  buffer,
           size_t nMaxBytesToRead ) override
     {
-        if ( buffer == nullptr ) {
-            throw std::invalid_argument( "Buffer may not be nullptr!" );
-        }
-
         if ( nMaxBytesToRead == 0 ) {
             return 0;
         }
@@ -288,6 +284,10 @@ public:
                 m_statistics->lastAccessOffset = newOffset;
             }
 
+            if ( buffer == nullptr ) {
+                throw std::invalid_argument( "Buffer may not be nullptr!" );
+            }
+
             nMaxBytesToRead = std::min( nMaxBytesToRead, *fileSize - m_currentPosition );
             const auto nBytesReadWithPread = ::pread( sharedFile->fileno(), buffer, nMaxBytesToRead,
                                                       m_currentPosition );
@@ -305,22 +305,47 @@ public:
         } else
     #endif
         {
-            const auto fileLock = getLock();
+            if ( auto* const singlePassReader = dynamic_cast<SinglePassFileReader*>( sharedFile.get() );
+                 singlePassReader != nullptr )
+            {
+                /* This special case is necessary to avoid lock contention. We don't want to keep the lock
+                 * while simply copying the data from a buffer. In the meantime, some other thread could also
+                 * copy already. Basically it is a replacement because pread cannot be used. */
+                while ( nBytesRead < nMaxBytesToRead ) {
+                    SinglePassFileReader::ChunkResult chunk;
+                    const auto nBytesToRead = nMaxBytesToRead - nBytesRead;
+                    {
+                        const auto fileLock = getLock();
+                        chunk = singlePassReader->preadChunk( m_currentPosition + nBytesRead, nBytesToRead );
+                    }
 
-            if ( m_statistics && m_statistics->enabled ) {
-                const std::scoped_lock lock{ m_statistics->mutex };
-                const auto oldOffset = sharedFile->tell();
-                if ( m_currentPosition > oldOffset ) {
-                    m_statistics->seekForward.merge( m_currentPosition - oldOffset );
-                } else if ( m_currentPosition < oldOffset ) {
-                    m_statistics->seekBack.merge( oldOffset - m_currentPosition );
+                    const auto nBytesReadPerCall =
+                        chunk.read( buffer == nullptr ? nullptr : buffer + nBytesRead, nBytesToRead );
+                    if ( nBytesReadPerCall == 0 ) {
+                        break;
+                    }
+
+                    nBytesRead += nBytesReadPerCall;
                 }
+            } else {
+                const auto fileLock = getLock();
+
+                if ( m_statistics && m_statistics->enabled ) {
+                    const std::scoped_lock lock{ m_statistics->mutex };
+                    const auto oldOffset = sharedFile->tell();
+                    if ( m_currentPosition > oldOffset ) {
+                        m_statistics->seekForward.merge( m_currentPosition - oldOffset );
+                    } else if ( m_currentPosition < oldOffset ) {
+                        m_statistics->seekBack.merge( oldOffset - m_currentPosition );
+                    }
+                }
+
+                /* Seeking alone does not clear the EOF nor fail bit if the last read did set it. */
+                sharedFile->clearerr();
+                sharedFile->seek( m_currentPosition, SEEK_SET );
+                nBytesRead = sharedFile->read( buffer, nMaxBytesToRead );
             }
 
-            /* Seeking alone does not clear the EOF nor fail bit if the last read did set it. */
-            sharedFile->clearerr();
-            sharedFile->seek( m_currentPosition, SEEK_SET );
-            nBytesRead = sharedFile->read( buffer, nMaxBytesToRead );
             if ( ( nBytesRead == 0 ) && !m_fileSizeBytes ) {
                 m_fileSizeBytes = sharedFile->size();
             }

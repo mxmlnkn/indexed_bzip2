@@ -150,6 +150,12 @@ private:
             return m_buffer.get();
         }
 
+        [[nodiscard]] long
+        use_count() const noexcept
+        {
+            return m_buffer.use_count();
+        }
+
     private:
         std::shared_ptr<std::byte> m_buffer;
         size_t m_size{ 0 };
@@ -223,6 +229,72 @@ public:
         return true;
     }
 
+    class ChunkResult
+    {
+    public:
+        ChunkResult() = default;
+        ChunkResult( ChunkResult&& ) = default;
+        ChunkResult( const ChunkResult& ) = delete;
+        ChunkResult& operator=( ChunkResult&& ) = default;
+        ChunkResult& operator=( const ChunkResult& ) = delete;
+
+        ChunkResult( Chunk  chunk,
+                     size_t offset ) :
+            m_chunk( std::move( chunk ) ),
+            m_offset( offset )
+        {}
+
+        [[nodiscard]] size_t
+        read( char*  buffer,
+              size_t nMaxBytesToRead )
+        {
+            if ( m_offset >= m_chunk.size() ) {
+                return 0;
+            }
+
+            const auto nBytesToRead = std::min( nMaxBytesToRead, m_chunk.size() - m_offset );
+            if ( buffer != nullptr ) {
+                std::memcpy( buffer, m_chunk.data() + m_offset, nBytesToRead );
+            }
+            m_offset += nBytesToRead;
+            return nBytesToRead;
+        }
+
+        [[nodiscard]] bool
+        empty() const
+        {
+            return m_offset >= m_chunk.size();
+        }
+
+    private:
+        Chunk m_chunk;
+        size_t m_offset{ 0 };
+    };
+
+    [[nodiscard]] ChunkResult
+    preadChunk( size_t offset,
+                size_t nMaxBytesToRead )
+    {
+        if ( nMaxBytesToRead == 0 ) {
+            return {};
+        }
+
+        bufferUpTo( saturatingAddition( offset, nMaxBytesToRead ) );
+        const auto chunkIndex = getChunkIndex( offset );
+        const auto chunkOffset = chunkIndex * CHUNK_SIZE;
+        auto chunk = getChunk( chunkIndex );
+
+        if ( ( chunkOffset > offset ) || ( offset - chunkOffset > chunk.size() ) ) {
+            throw std::logic_error( "Calculation of start chunk seems to be wrong!" );
+        }
+
+        if ( chunk.empty() ) {
+            return {};
+        }
+
+        return ChunkResult( std::move( chunk ), offset - chunkOffset );
+    }
+
     [[nodiscard]] size_t
     read( char*  buffer,
           size_t nMaxBytesToRead ) override
@@ -232,13 +304,16 @@ public:
         }
 
         bufferUpTo( saturatingAddition( m_currentPosition, nMaxBytesToRead ) );
-        const std::lock_guard lock( m_bufferMutex );
-        const auto startChunk = getChunkIndexUnsafe( m_currentPosition );
+        const auto startChunk = getChunkIndex( m_currentPosition );
 
         size_t nBytesRead{ 0 };
-        for ( size_t i = startChunk; ( i < m_buffer.size() ) && ( nBytesRead < nMaxBytesToRead ); ++i ) {
+        for ( size_t i = startChunk; nBytesRead < nMaxBytesToRead; ++i ) {
             const auto chunkOffset = i * CHUNK_SIZE;
-            const auto& chunk = getChunk( i );
+            const auto chunk = getChunk( i );
+            if ( chunk.empty() ) {
+                break;
+            }
+
             const auto* sourceOffset = chunk.data();
             auto nAvailableBytes = chunk.size();
 
@@ -312,6 +387,11 @@ public:
         /* The untilOffset is exclusive, i.e., 0 should release nothing! */
         const auto lastChunkToRelease = std::min( untilOffset / CHUNK_SIZE, m_buffer.size() - 2 );
         for ( auto i = m_releasedChunkCount; i < lastChunkToRelease; ++i ) {
+            if ( m_buffer[i].use_count() > 1 ) {
+                m_releasedChunkCount = i;
+                return;
+            }
+
             if ( m_reusableChunks.size() < m_maxReusableChunkCount ) {
                 std::swap( m_buffer[i], m_reusableChunks.emplace_back() );
             } else {
@@ -347,9 +427,15 @@ private:
         m_bufferUntilOffset = untilOffset;
         m_notifyReaderThread.notify_one();
 
+        /* Quick lock-free check. */
+        if ( untilOffset <= m_numberOfBytesRead ) {
+            return;
+        }
+
+        /* Longer condition_variable based non-busy wait. */
         std::unique_lock lock( m_bufferMutex );
         m_bufferChanged.wait( lock, [this, untilOffset] () {
-            return m_underlyingFileEOF || ( m_buffer.size () * CHUNK_SIZE >= untilOffset );
+            return m_underlyingFileEOF || ( m_buffer.size() * CHUNK_SIZE >= untilOffset );
         } );
     }
 
@@ -418,21 +504,29 @@ private:
                 }
                 nBytesBuffered += nBytesRead;
             }
-            chunk.resize( nBytesBuffered );
 
-            {
+            if ( nBytesBuffered > 0 ) {
+                chunk.resize( nBytesBuffered );
+
                 const std::lock_guard lock( m_bufferMutex );
                 m_numberOfBytesRead += nBytesBuffered;
                 m_underlyingFileEOF = nBytesBuffered < CHUNK_SIZE;
                 m_buffer.emplace_back( std::move( chunk ) );
+            } else {
+                const std::lock_guard lock( m_bufferMutex );
+                m_underlyingFileEOF = true;
+                m_reusableChunks.emplace_back( std::move( chunk ) );
             }
+
             m_bufferChanged.notify_all();
         }
     }
 
     [[nodiscard]] size_t
-    getChunkIndexUnsafe( const size_t offset ) const
+    getChunkIndex( const size_t offset ) const
     {
+        const std::lock_guard lock( m_bufferMutex );
+
         /* Find start chunk to start reading from. */
         const auto startChunk = offset / CHUNK_SIZE;
         if ( offset < m_numberOfBytesRead ) {
@@ -452,10 +546,15 @@ private:
         return startChunk;
     }
 
-    [[nodiscard]] const Chunk&
+    [[nodiscard]] Chunk
     getChunk( size_t index ) const
     {
-        const auto& chunk = m_buffer.at( index );
+        const std::lock_guard lock( m_bufferMutex );
+        if ( index >= m_buffer.size() ) {
+            return {};
+        }
+
+        auto chunk = m_buffer[index];
 
         if ( ( index + 1 < m_buffer.size() ) && ( chunk.size() != CHUNK_SIZE ) ) {
             std::stringstream message;
