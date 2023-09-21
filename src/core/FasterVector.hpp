@@ -3,6 +3,40 @@
 #include <vector>
 
 
+// Allocator adaptor that interposes construct() calls to
+// convert value initialization into default initialization.
+template <typename T, typename A = std::allocator<T> >
+class NonInitializingAllocator :
+    public A
+{
+private:
+    using a_t = std::allocator_traits<A>;
+
+public:
+    template <typename U>
+    struct rebind
+    {
+        using other = NonInitializingAllocator<U, typename a_t::template rebind_alloc<U> >;
+    };
+
+    using A::A;
+
+    template<typename U>
+    void construct( U* ptr ) noexcept( std::is_nothrow_default_constructible<U>::value )
+    {
+        if constexpr ( !std::is_pod_v<T> ) {
+            ::new( static_cast<void*>( ptr ) ) U;
+        }
+    }
+
+    //template<typename U, typename... Args>
+    //void
+    //construct( U* ptr, Args&&... args )
+    //{
+    //    a_t::construct( static_cast<A&>( *this ), ptr, std::forward<Args>( args )... );
+    //}
+};
+
 #ifdef WITH_RPMALLOC
     #include <rpmalloc.h>
 
@@ -71,6 +105,19 @@ public:
     {
         return false;
     }
+
+    //template<typename U>
+    //void construct( U* ptr ) noexcept( std::is_nothrow_default_constructible<U>::value )
+    //{
+    //    ::new( static_cast<void*>( ptr ) ) U;
+    //}
+
+    //template<typename U, typename... Args>
+    //void
+    //construct( U* ptr, Args&&... args )
+    //{
+    //    a_t::construct( static_cast<A&>( *this ), ptr, std::forward<Args>( args )... );
+    //}
 };
 
 
@@ -80,9 +127,15 @@ static_assert( std::is_empty_v<RpmallocAllocator<char> > );
 template<typename T>
 using FasterVector = std::vector<T, RpmallocAllocator<T> >;
 
+template<typename T>
+using FasterVector2 = std::vector<T, NonInitializingAllocator<RpmallocAllocator<T> > >;
+
 #else
 
 template<typename T>
 using FasterVector = std::vector<T>;
+
+template<typename T>
+using FasterVector2 = std::vector<T, NonInitializingAllocator<T> >;
 
 #endif
