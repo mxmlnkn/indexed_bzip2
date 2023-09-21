@@ -102,7 +102,59 @@ private:
      * - The performance benefits of chunk reuse is already saturated quite a lot below the limit for which there
      *   is no unnecessary allocation at all.
      */
-    using Chunk = FasterVector<std::byte>;
+    class Chunk
+    {
+    public:
+        [[nodiscard]] size_t
+        size() const noexcept
+        {
+            return m_size;
+        }
+
+        [[nodiscard]] bool
+        empty() const noexcept
+        {
+            return m_size == 0;
+        }
+
+        void
+        resize( const size_t size )
+        {
+            if ( size <= m_capacity ) {
+                m_size = m_capacity;
+                return;
+            }
+
+            m_capacity = ceilDiv( size, CHUNK_SIZE ) * CHUNK_SIZE;
+            m_size = size;
+            m_buffer.reset();
+
+        #ifdef WITH_RPMALLOC
+            m_buffer = std::shared_ptr<std::byte>( reinterpret_cast<std::byte*>( rpmalloc( m_capacity ) ),
+                                                   [] ( std::byte* ptr ) { rpfree( ptr ); } );
+        #else
+            m_buffer = std::shared_ptr<std::byte>( reinterpret_cast<std::byte*>( malloc( m_capacity ) ),
+                                                   [] ( std::byte* ptr ) { free( ptr ); } );
+        #endif
+        }
+
+        [[nodiscard]] const std::byte*
+        data() const
+        {
+            return m_buffer.get();
+        }
+
+        [[nodiscard]] std::byte*
+        data()
+        {
+            return m_buffer.get();
+        }
+
+    private:
+        std::shared_ptr<std::byte> m_buffer;
+        size_t m_size{ 0 };
+        size_t m_capacity{ 0 };
+    };
 
 public:
     explicit
