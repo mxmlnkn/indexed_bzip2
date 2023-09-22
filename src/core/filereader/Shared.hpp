@@ -156,6 +156,7 @@ public:
          * seems like a bug-prone functionality. If you really want to close a file, delete all SharedFileReader
          * classes using it. It will be closed by the last destructor @see deleter set in the constructor. */
         const auto lock = getLock();
+        m_currentChunk = {};
         m_sharedFile.reset();
     }
 
@@ -219,20 +220,31 @@ public:
     seek( long long int offset,
           int           origin = SEEK_SET ) override
     {
+        size_t newPosition = m_currentPosition;
         if ( ( origin == SEEK_END ) && !size().has_value() ) {
             const auto fileLock = getLock();
             offset = m_sharedFile->seek( offset, origin );
             /* File size must have become available when seeking relative to end. */
             m_fileSizeBytes = m_sharedFile->size();
 
-            m_currentPosition = static_cast<size_t>( std::max( 0LL, offset ) );
+            newPosition = static_cast<size_t>( std::max( 0LL, offset ) );
             if ( const auto fileSize = size(); fileSize ) {
-                m_currentPosition = std::min( m_currentPosition, *fileSize );
+                newPosition = std::min( m_currentPosition, *fileSize );
             }
         } else {
-            m_currentPosition = effectiveOffset( offset, origin );
+            newPosition = effectiveOffset( offset, origin );
         }
 
+        if ( newPosition >= m_currentPosition ) {
+            const auto nBytesForward = newPosition - m_currentPosition;
+            if ( nBytesForward != m_currentChunk.read( nullptr, nBytesForward ) ) {
+                m_currentChunk = {};
+            }
+        } else {
+            m_currentChunk = {};
+        }
+
+        m_currentPosition = newPosition;
         return m_currentPosition;
     }
 
@@ -312,15 +324,14 @@ public:
                  * while simply copying the data from a buffer. In the meantime, some other thread could also
                  * copy already. Basically it is a replacement because pread cannot be used. */
                 while ( nBytesRead < nMaxBytesToRead ) {
-                    SinglePassFileReader::ChunkResult chunk;
                     const auto nBytesToRead = nMaxBytesToRead - nBytesRead;
-                    {
+                    if ( m_currentChunk.empty() ) {
                         const auto fileLock = getLock();
-                        chunk = singlePassReader->preadChunk( m_currentPosition + nBytesRead, nBytesToRead );
+                        m_currentChunk = singlePassReader->preadChunk( m_currentPosition + nBytesRead, nBytesToRead );
                     }
 
                     const auto nBytesReadPerCall =
-                        chunk.read( buffer == nullptr ? nullptr : buffer + nBytesRead, nBytesToRead );
+                        m_currentChunk.read( buffer == nullptr ? nullptr : buffer + nBytesRead, nBytesToRead );
                     if ( nBytesReadPerCall == 0 ) {
                         break;
                     }
@@ -465,6 +476,7 @@ private:
      * each read call will seek to this offset in an atomic manner before reading from the underlying file.
      */
     size_t m_currentPosition{ 0 };
+    SinglePassFileReader::ChunkResult m_currentChunk;
 
     bool m_usePread{ true };
 };
