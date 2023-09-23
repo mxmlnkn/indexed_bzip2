@@ -2,7 +2,7 @@ name: Build Conda Packages
 
 on:
   push:
-    branches: 'master'
+    branches: 'develop'
 
 jobs:
   Build-Conda:

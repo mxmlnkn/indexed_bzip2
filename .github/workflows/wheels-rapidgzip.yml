@@ -2,7 +2,7 @@ name: Build Wheels for rapidgzip
 
 on:
   push:
-    branches: 'master'
+    branches: 'develop'
 
 jobs:
   Build-Wheels:
