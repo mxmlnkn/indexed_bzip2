@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include <CompressedVector.hpp>
 #include <DecodedData.hpp>
 #include <FasterVector.hpp>
 #include <VectorView.hpp>
@@ -16,7 +17,7 @@
 class WindowMap
 {
 public:
-    using Window = FasterVector<std::uint8_t>;
+    using Window = CompressedVector<FasterVector<uint8_t> >;
     using WindowView = VectorView<std::uint8_t>;
     using SharedWindow = std::shared_ptr<const Window>;
     using Windows = std::map</* encoded block offset */ size_t, SharedWindow>;
@@ -35,7 +36,7 @@ public:
     emplace( const size_t encodedBlockOffset,
              WindowView   window )
     {
-        emplaceShared( encodedBlockOffset, std::make_shared<Window>( window.begin(), window.end() ) );
+        emplaceShared( encodedBlockOffset, std::make_shared<Window>( window, m_compressionType ) );
     }
 
     void
@@ -44,6 +45,14 @@ public:
     {
         if ( !sharedWindow ) {
             return;
+        }
+
+        if ( sharedWindow && ( sharedWindow->compressionType() != m_compressionType ) ) {
+            std::stringstream message;
+            message << "The compressed vector to be emplaced must match the WindowMap compression type! Got "
+                    << toString( sharedWindow->compressionType() ) << " but expected "
+                    << toString( m_compressionType ) << ".";
+            throw std::invalid_argument( std::move( message ).str());
         }
 
         std::scoped_lock lock( m_mutex );
@@ -57,7 +66,7 @@ public:
             m_windows.emplace_hint( m_windows.end(), encodedBlockOffset, std::move( sharedWindow ) );
         } else {
             const auto match = m_windows.find( encodedBlockOffset );
-            if ( ( match != m_windows.end() ) && ( *match->second != *sharedWindow ) ) {
+            if ( match != m_windows.end() ) {
                 throw std::invalid_argument( "Window offset to insert already exists and may not be changed!" );
             }
             m_windows.emplace( encodedBlockOffset, std::move( sharedWindow ) );
@@ -115,6 +124,12 @@ public:
         return m_windows.size();
     }
 
+    [[nodiscard]] CompressionType
+    compressionType() const noexcept
+    {
+        return m_compressionType;
+    }
+
     [[nodiscard]] bool
     operator==( const WindowMap& other ) const
     {
@@ -137,6 +152,12 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool
+    operator!=( const WindowMap& other ) const
+    {
+        return !( *this == other );
+    }
+
 private:
     mutable std::mutex m_mutex;
 
@@ -152,4 +173,5 @@ private:
      * i.e., the hint can always be end():
      */
     Windows m_windows;
+    CompressionType m_compressionType{ CompressionType::GZIP };
 };

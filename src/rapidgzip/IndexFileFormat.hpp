@@ -483,7 +483,7 @@ writeGzipIndex( const GzipIndex&                                              in
 
     if ( !std::all_of( checkpoints.begin(), checkpoints.end(), [&index, windowSizeInBytes] ( const auto& checkpoint ) {
                            const auto window = index.windows->get( checkpoint.compressedOffsetInBits );
-                           return window && ( window->empty() || ( window->size() >= windowSizeInBytes ) );
+                           return window && ( window->empty() || ( window->decompressedSize() >= windowSizeInBytes ) );
                        } ) )
     {
         throw std::invalid_argument( "All window sizes must be at least 32 KiB or empty!" );
@@ -527,7 +527,7 @@ writeGzipIndex( const GzipIndex&                                              in
             continue;
         }
 
-        const auto window = *result;
+        const auto window = result->decompress();
         if ( window.empty() ) {
             continue;
         }

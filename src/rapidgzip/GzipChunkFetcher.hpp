@@ -256,7 +256,7 @@ private:
                     << formatBits( chunkData->encodedOffsetInBits ) << ", "
                     << formatBits( chunkData->encodedOffsetInBits + chunkData->encodedSizeInBits ) << "].\n"
                     << "    Window size for the chunk offset: "
-                    << ( lastWindow ? std::to_string( lastWindow->size() ) : "no window" ) << ".";
+                    << ( lastWindow ? std::to_string( lastWindow->decompressedSize() ) : "no window" ) << ".";
             throw std::logic_error( std::move( message ).str() );
         }
 
@@ -300,7 +300,7 @@ private:
                     << " should exist at this point!";
             throw std::logic_error( std::move( message ).str() );
         }
-        const auto& lastWindow = *sharedLastWindow;
+        const auto lastWindow = sharedLastWindow->decompress();
 
         postProcessChunk( chunkData, lastWindow );
         appendSubchunksToIndexes( chunkData, chunkData->subchunks, lastWindow );
@@ -467,7 +467,7 @@ private:
             if ( !sharedPreviousWindow ) {
                 continue;
             }
-            const auto& previousWindow = *sharedPreviousWindow;
+            const auto previousWindow = sharedPreviousWindow->decompress();
 
             const auto windowOffset = chunkData->encodedOffsetInBits + chunkData->encodedSizeInBits;
             if ( !m_windowMap->get( windowOffset ) ) {
@@ -476,9 +476,9 @@ private:
 
             m_markersBeingReplaced.emplace(
                 chunkData->encodedOffsetInBits,
-                this->submitTaskWithHighPriority(
-                    [this, chunkData, sharedPreviousWindow] () { replaceMarkers( chunkData, *sharedPreviousWindow ); }
-                )
+                this->submitTaskWithHighPriority( [this, chunkData, sharedPreviousWindow] () {
+                    replaceMarkers( chunkData, sharedPreviousWindow->decompress() );
+                } )
             );
         }
     }
@@ -692,7 +692,7 @@ public:
         #endif
 
             const auto fileSize = originalBitReader.size();
-            const auto& window = *initialWindow;
+            const auto window = initialWindow->decompress();
 
             auto result = configuredChunkData;
             result.encodedOffsetInBits = blockOffset;
@@ -723,7 +723,7 @@ public:
         BitReader bitReader( originalBitReader );
         if ( initialWindow ) {
             bitReader.seek( blockOffset );
-            const auto& window = *initialWindow;
+            const auto window = initialWindow->decompress();
             return decodeBlockWithRapidgzip( &bitReader, untilOffset, window, maxDecompressedChunkSize,
                                              ChunkData( configuredChunkData ) );
         }
@@ -1280,9 +1280,7 @@ public:
 
         #ifdef WITH_ISAL
             if ( cleanDataCount >= deflate::MAX_WINDOW_SIZE ) {
-                const deflate::DecodedVector window = result.getLastWindow( {} );
-                return finishDecodeBlockWithIsal( bitReader, untilOffset,
-                                                  VectorView<uint8_t>( window.data(), window.size() ),
+                return finishDecodeBlockWithIsal( bitReader, untilOffset, result.getLastWindow( {} ),
                                                   maxDecompressedChunkSize, std::move( result ) );
             }
         #endif

@@ -227,7 +227,7 @@ testIsalBug()
         bitReader,
         blockOffset,
         untilOffset,
-        /* window */ std::make_shared<WindowMap::Window>( window ),
+        /* window */ std::make_shared<WindowMap::Window>( window, CompressionType::GZIP ),
         /* decodedSize */ 4171816,
         cancel,
         configuredChunkData,

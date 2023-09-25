@@ -163,6 +163,12 @@ public:
                && ( m_decompressedSize == other.m_decompressedSize );
     }
 
+    [[nodiscard]] bool
+    operator!=( const CompressedVector& other ) const
+    {
+        return !( *this == other );
+    }
+
 private:
     CompressionType m_compressionType{ CompressionType::GZIP };
     Container m_data;
