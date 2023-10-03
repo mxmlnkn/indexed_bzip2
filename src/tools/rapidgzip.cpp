@@ -423,6 +423,182 @@ rapidgzipCLI( int                  argc,
         return 1;
     }
 
+    /*
+    Read 340425 checkpoints
+        Windows Count: 340425
+        Total Window Size: 1 GiB 652 MiB 217 KiB 518 B
+
+
+    Read 340425 checkpoints
+    Failed to get sparse window for 872343404952 with error: Failed to decode the deflate block header! End of file reached.. Will ignore it.
+        Windows Count: 340424
+        Total Window Size: 747 MiB 794 KiB 512 B
+
+    real	6m22.796s
+    user	1m6.975s
+    sys	0m33.980s
+
+
+        -> Not as large a reduction as hoped for but 2x still is nice
+
+    Read 340425 checkpoints
+    Failed to get sparse window for 872343404952 with error: Failed to decode the deflate block header! End of file reached.. Will ignore it.
+        Windows Count: 340424
+        Total Window Size: 609 MiB 568 KiB 423 B
+
+    real	6m29.877s
+    user	1m14.430s
+    sys	0m33.450s
+
+     -> level 1 (without buffer) instead of level 0! It really is worth it at this point
+
+    Read 340425 checkpoints
+    Failed to get sparse window for 872343404952 with error: Failed to decode the deflate block header! End of file reached.. Will ignore it.
+        Windows Count: 340424
+        Total Window Size: 608 MiB 126 KiB 654 B
+
+     -> level 2 instead of level 0. Not worth it
+
+    ISA-L (level 1)
+        Windows Count: 340424
+        Total Window Size: 609 MiB 568 KiB 422 B
+        Total Window Size Batch-Compressed: 609 MiB 566 KiB 856 B
+        Total Window Size Without Zeros: 608 MiB 212 KiB 519 B
+
+    zlib (default level (6))
+
+        Windows Count: 340424
+        Total Window Size: 528 MiB 323 KiB 15 B
+        Total Window Size Batch-Compressed: 528 MiB 320 KiB 519 B
+        Total Window Size Without Zeros: 527 MiB 507 KiB 103 B
+
+    real	11m30.027s
+    user	7m36.295s
+    sys	0m34.736s
+
+
+
+    m rapidgzip && time src/tools/rapidgzip --import-index 4GiB-base64.gz{.index,}
+    ninja: no work to do.
+    Read 780 checkpoints
+    Failed to get sparse window for 26111249624 with error: Failed to decode the deflate block header! End of file reached.. Will ignore it.
+        Windows Count: 779
+        Total Window Size: 632 KiB 301 B
+
+    real	0m0.357s
+    user	0m0.221s
+    sys	0m0.032s
+
+
+    stat 4GiB-base64.gz.index
+      File: 4GiB-base64.gz.index
+      Size: 25540347  	Blocks: 49888      IO Block: 4096   regular file
+
+    ISA-L
+        Windows Count: 779
+        Total Window Size: 439 KiB 44 B
+        Total Window Size Batch-Compressed: 438 KiB 216 B
+        Total Window Size Without Zeros: 417 KiB 37 B
+
+    Zlib:
+        Windows Count: 779
+        Total Window Size: 338 KiB 553 B
+        Total Window Size Batch-Compressed: 337 KiB 479 B
+        Total Window Size Without Zeros: 336 KiB 538 B
+    */
+    if ( !args.indexLoadPath.empty() ) {
+        const auto file = ensureSharedFileReader( std::move( inputFile ) );
+        auto indexFile = std::make_unique<StandardFileReader>( args.indexLoadPath );
+        const auto index = readGzipIndex( std::move( indexFile ), file->clone() );
+
+        std::cerr << "Read " << index.checkpoints.size() << " checkpoints\n";
+
+        if ( !index.windows ) {
+            throw std::logic_error( "There should be a valid window map!" );
+        }
+
+        size_t windowSize2{ 0 };
+        size_t windowSize3{ 0 };
+        size_t windowSize4{ 0 };
+        /* compress windows in batches. */
+        std::vector<uint8_t> allWindows;
+        std::vector<uint8_t> allWindows4;
+        size_t windowBatchCount{ 0 };
+
+        std::array<uint8_t, 64_Ki> windowPatches;
+
+        rapidgzip::BitReader bitReader( file->clone() );
+        WindowMap windows;
+        for ( const auto& checkpoint : index.checkpoints ) {
+            const auto fullWindow = index.windows->get( checkpoint.compressedOffsetInBits );
+            if ( !fullWindow ) {
+                throw std::logic_error( "Windows to all checkpoints should exist!" );
+            }
+
+            if ( fullWindow->empty() ) {
+                windows.emplace( checkpoint.compressedOffsetInBits, *fullWindow );
+                continue;
+            }
+
+
+            try {
+                bitReader.seek( checkpoint.compressedOffsetInBits );
+                const auto sparseWindow = rapidgzip::deflate::getSparseWindow( bitReader, *fullWindow );
+                windows.emplace( checkpoint.compressedOffsetInBits, sparseWindow );
+
+                allWindows.insert( allWindows.end(), sparseWindow.begin(), sparseWindow.end() );
+                if ( ++windowBatchCount >= 16 ) {
+                    windowSize2 += rapidgzip::compressWithIsal( allWindows ).size();
+                    allWindows.clear();
+                }
+
+                /** @todo this only works for the .json file, else we need to adjust getSparseWindow.
+                 * Format: <length zeros (may be 0)> <length data> <data> <length zeros> ...
+                 */
+                size_t targetSize{ 0 };
+                bool lookingForZeros{ true };
+                size_t length{ 0 };
+                for ( size_t i = 0; i < sparseWindow.size(); ++i ) {
+                    const auto isZero = sparseWindow[i] == 0;
+
+                    if ( isZero != lookingForZeros ) {
+                        windowPatches[targetSize++] = static_cast<uint8_t>( length );
+                        lookingForZeros = false;
+                        length = 0;
+                    }
+
+                    if ( !isZero ) {
+                        windowPatches[targetSize++] = sparseWindow[i];
+                    }
+                }
+
+                windowSize3 += rapidgzip::compressWithIsal( { windowPatches.data(), targetSize } ).size();
+
+                allWindows4.insert( allWindows4.end(), windowPatches.begin(), windowPatches.begin() + targetSize );
+                if ( ++windowBatchCount >= 16 ) {
+                    windowSize4 += rapidgzip::compressWithIsal( allWindows4 ).size();
+                    allWindows4.clear();
+                }
+            } catch ( const std::exception& exception ) {
+                std::cerr << "Failed to get sparse window for " << checkpoint.compressedOffsetInBits << " with error: "
+                          << exception.what() << ". Will ignore it.\n";
+            }
+        }
+
+        /* Analyze the windows. */
+        const auto [lock, windowMap] = windows.data();
+        const auto windowSize =
+            std::accumulate( windowMap->begin(), windowMap->end(), size_t( 0 ),
+                             [] ( size_t sum, const auto& kv ) { return sum + kv.second.compressedSize(); } );
+        std::cerr << "    Windows Count: " << windowMap->size() << "\n"
+                  << "    Total Window Size: " << formatBytes( windowSize ) << "\n"
+                  << "    Total Window Size Batch-Compressed: " << formatBytes( windowSize2 ) << "\n"
+                  << "    Total Window Size Without Zeros: " << formatBytes( windowSize3 ) << "\n"
+                  << "    Total Window Size Without Zeros Batch-Compressed: " << formatBytes( windowSize4 ) << "\n";
+
+        return 0;
+    }
+
     /* Actually do things as requested. */
 
     if ( decompress || countBytes || countLines || !args.indexSavePath.empty() ) {
