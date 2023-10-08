@@ -129,6 +129,124 @@ testIndexReadWrite( const std::filesystem::path& compressedPath,
 }
 
 
+void
+testRandomAccessIndex()
+{
+    std::vector<char> buffer;
+    const auto writeToBuffer =
+        [&buffer] ( const void* const data, const size_t size )
+        {
+            const auto oldSize = buffer.size();
+            buffer.resize( oldSize + size );
+            std::memcpy( buffer.data() + oldSize, data, size );
+        };
+
+    GzipIndex index;
+    index.compressedSizeInBytes = 1_Mi;
+    index.windows = std::make_shared<WindowMap>();
+
+    {
+        auto& checkpoint = index.checkpoints.emplace_back();
+        checkpoint.compressedOffsetInBits = 0;
+        checkpoint.uncompressedOffsetInBytes = 20;
+
+        index.windows->emplace( checkpoint.compressedOffsetInBits, {}, CompressionType::NONE );
+    }
+
+    {
+        auto& checkpoint = index.checkpoints.emplace_back();
+        checkpoint.compressedOffsetInBits = 100;
+        checkpoint.uncompressedOffsetInBytes = 40;
+
+        const std::vector<char> window = { 1, 2, 3 };
+        index.windows->emplace( checkpoint.compressedOffsetInBits, window, CompressionType::NONE );
+    }
+
+    RandomAccessIndex::writeGzipIndex( index, writeToBuffer );
+
+    const auto restoredIndex = RandomAccessIndex::readGzipIndex( std::make_unique<BufferViewFileReader>( buffer ),
+                                                                 index.compressedSizeInBytes );
+
+    REQUIRE_EQUAL( index.compressedSizeInBytes, restoredIndex.compressedSizeInBytes );
+    REQUIRE_EQUAL( index.uncompressedSizeInBytes, restoredIndex.uncompressedSizeInBytes );
+    REQUIRE_EQUAL( index.checkpointSpacing, restoredIndex.checkpointSpacing );
+    REQUIRE_EQUAL( index.windowSizeInBytes, restoredIndex.windowSizeInBytes );
+    REQUIRE( index.checkpoints == restoredIndex.checkpoints );
+    REQUIRE_EQUAL( static_cast<bool>( index.windows ), static_cast<bool>( restoredIndex.windows ) );
+
+    if ( index.windows && restoredIndex.windows ) {
+        REQUIRE_EQUAL( index.windows->size(), restoredIndex.windows->size() );
+        if ( index.windows->size() == restoredIndex.windows->size() ) {
+            const auto [lock, windowData] = index.windows->data();
+            const auto [lock2, restoredWindowData] = restoredIndex.windows->data();
+
+            size_t i{ 0 };
+            for ( auto it = windowData->begin(), it2 = restoredWindowData->begin(); i < windowData->size();
+                  ++it, ++it2, ++i )
+            {
+                REQUIRE( static_cast<bool>( it->second ) );
+                if ( !it->second ) {
+                    return;
+                }
+
+                const auto& [offset, window] = *it;
+                const auto& [restoredOffset, restoredWindow] = *it2;
+
+                if ( offset != restoredOffset ) {
+                    std::cerr << "Window offsets at index: " << i << " differ: " << offset << " vs. restored: "
+                              << restoredOffset << "\n";
+                }
+
+                if ( window->decompressedSize() != restoredWindow->decompressedSize() ) {
+                    std::cerr << "Window decompressed sizes at index: " << i << " differ: "
+                              << window->decompressedSize()<< " vs. restored: "
+                              << restoredWindow->decompressedSize() << "\n";
+                }
+
+                auto data = window->compressedData();
+                auto restoredData = restoredWindow->compressedData();
+                if ( window->compressionType() != restoredWindow->compressionType() ) {
+                    data = window->decompress();
+                    std::cerr << "Decompress restored window with compression type: "
+                              << toString( restoredWindow->compressionType() ) << ", compressed size: "
+                              << window->compressedSize() << ", decompressed size: " << window->decompressedSize()
+                              << "\n";
+                    restoredData = restoredWindow->decompress();
+                }
+
+                if ( !data || !restoredData ) {
+                    throw std::logic_error( "Expected valid compressed data!" );
+                }
+
+                if ( *data != *restoredData ) {
+                    std::cerr << "Compressed window data at index: " << i << " differs!\n";
+                    std::stringstream contents;
+
+                    contents << "    Original: {" << std::hex;
+                    for ( const auto& value : *data ) {
+                        contents << " " << static_cast<uint32_t>( value );
+                    }
+                    contents << " }\n";
+
+                    contents << "    Restored: {" << std::hex;
+                    for ( const auto& value : *restoredData ) {
+                        contents << " " << static_cast<uint32_t>( value );
+                    }
+                    contents << " }\n";
+
+                    std::cerr << std::move( contents ).str();
+                }
+            }
+        }
+
+        /* Locks from WindowMap::data call above must be released before calling this! */
+        REQUIRE( *index.windows == *restoredIndex.windows );
+    }
+
+    REQUIRE( index == restoredIndex );
+}
+
+
 int
 main( int    argc,
       char** argv )
@@ -137,6 +255,8 @@ main( int    argc,
         std::cerr << "Expected at least the launch command as the first argument!\n";
         return 1;
     }
+
+    testRandomAccessIndex();
 
     const std::string binaryFilePath( argv[0] );
     auto binaryFolder = std::filesystem::path( binaryFilePath ).parent_path().string();
