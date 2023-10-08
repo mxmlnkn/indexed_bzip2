@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -231,6 +232,620 @@ readBigEndianValue( FileReader* const file )
     }
     return value;
 }
+
+
+namespace RandomAccessIndex
+{
+enum class ChecksumType : uint8_t
+{
+    NONE     = 0,
+    CRC_1    = 1,
+    CRC_16   = 2,
+    CRC_32   = 3,
+    CRC_32C  = 4,
+    CRC_64   = 5,
+    ADLER_32 = 6,
+};
+
+
+[[nodiscard]] constexpr const char*
+toString( const ChecksumType checksumType )
+{
+    switch ( checksumType )
+    {
+    case ChecksumType::NONE    : return "None";
+    case ChecksumType::CRC_1   : return "CRC-1";
+    case ChecksumType::CRC_16  : return "CRC-16";
+    case ChecksumType::CRC_32  : return "CRC-32";
+    case ChecksumType::CRC_32C : return "CRC-32C";
+    case ChecksumType::CRC_64  : return "CRC-64";
+    case ChecksumType::ADLER_32: return "Adler-32";
+    }
+    return "Unknown";
+}
+
+
+[[nodiscard]] constexpr std::optional<size_t>
+getChecksumSize( const ChecksumType checksumType )
+{
+    switch ( checksumType )
+    {
+    case ChecksumType::NONE:
+        return 0U;
+    case ChecksumType::CRC_1:
+        return 1U;
+    case ChecksumType::CRC_16:
+        return 2U;
+    case ChecksumType::CRC_32:
+    case ChecksumType::CRC_32C:
+    case ChecksumType::ADLER_32:
+        return 4U;
+    case ChecksumType::CRC_64:
+        return 8U;
+    }
+    return std::nullopt;
+}
+
+
+static constexpr uint8_t SPARSE_FLAG = static_cast<uint8_t>( 1U << 7U );
+static constexpr uint8_t WINDOW_COMPRESSION_TYPE_MASK = 0b0111'1111U;
+
+
+/**
+ * Considerations:
+ *
+ *  - https://stackoverflow.com/questions/3321592/how-do-you-create-a-file-format
+ *  - https://softwareengineering.stackexchange.com/questions/171201/considerations-when-designing-a-file-type
+ *  - https://fadden.com/tech/file-formats.htm
+ *  - https://web.archive.org/web/20250118102842/https://games.greggman.com/game/zip-rant/
+ *  - https://solhsa.com/oldernews2025.html#ON-FILE-FORMATS
+ *  - https://news.ycombinator.com/item?id=44049252
+ *
+ * Motivation:
+ *  - 2025-08-08: I have forgotten why I needed this. I think I did not yet know of gztool at that point.
+ *                https://github.com/circulosmeos/gztool#index-file-format
+ *  - Pros over gztool index format:
+ *    - I would add per-chunk checksums.
+ *    - Would store sparse information, which could be used for additional correctness checking,
+ *      but probably redundant to per chunk checksums.
+ *    - The window compression in gztool seems to be undefined, but it uses deflate.
+ *      Using zlib would make a checksum redundant, although the checksum is not very strong.
+ *      Using other compressions would be important for LZ4 and BZ2 support.
+ *      At this point, my gztool index format would already kinda fork the original one,
+ *      but because the compressed window is prefixed with the length, it should be mostly compatible,
+ *      and by forcing the compression type to match the source archive format (zlib/deflate/gzip for gzip files,
+ *      lz4 window compression for index lz4 files, ...), it would stay compatible for gztool's domain of gzip files.
+ *    - Storing the window offset would make seeking in the index faster. Gztool index has the problem that
+ *      extracting a certain offset range or line needs to load the whole index. By having chunk information separate
+ *      and first, we only need to load that and can only load the window data needed directly from the window offset.
+ *      -> However, this limits index streaming, which seems to be a use case for gztool for adding to / completing
+ *         indexes of growing files through repeated calls, e.g., compressed logs.
+ *
+ * Writes the index information out in Random Access Index (RAI) format as defined below:
+ *
+ * @verbatim
+ * Index Format Outline:
+ *
+ * !!!!! I would refactor this to be extensible by using a generic key-value scheme, especially for the
+ *       "root" data, whose storage size is unimportant. Chunk information might be stored flat to save size,
+ *       but the windows should be the worst offender for storage size anyway, so I don't think even this is necessary!
+ * !!!!! Store every "member" (key-value) as a list of skippable formats:
+ *       File := List[<size> <member>]
+ *       size := "varint", any value other than 0 is the length. 0 denotes that the next 8 bits are a 64-bit number
+ *       member := <size> <char string for the information key / ID> <size> <value>
+ * !!! That's it! Having each information skippable because of the prefixed varint makes it backward compatible
+ *     out of the box. The format is also very easy to implement and parse. Keys can be added and removed.
+ *     Any required keys should be documented and enforced via manual checks instead.
+ * !!! This also makes it easy to have optional keys such as checksums and so on.
+ * !!! It is not fully self-describing. Knowledge about values have to be shared via the specification and matched
+ *     by the unique char string ID.
+ * I would almost have liked to use something like JSON, but with binary data, so something like BSON.
+ * But most serialization libraries do not offer interfaces for direct file access to large members, e.g., via mmap,
+ * i.e., everything has to fit into memory. And even streaming is a problem for most of these formats!
+ * -> See my old ratarmount serialization backend benchmarks before I was using SQLite!
+ * https://github.com/mxmlnkn/ratarmount/blob/master/benchmarks/BENCHMARKS.md
+ *      #benchmarks-for-the-index-file-serialization-backends
+ * -> Something like protobuf or flatbuf sounded like good contenders. But protobuf seems too opaque and static
+ *    and therefore with questionable compatibility. Flatbuf is one of the few that offers direct views to large
+ *    members, but well, I forgot what was wrong with it.
+ * -> MsgPack has the streaming problem, at least not easily.
+ *
+ * Offset | Size | Value          | Description
+ * -------+------+----------------+---------------------------------------------------
+ *      0 |    4 | Magic Bytes:   |  Don't have to be super short, it's negligible compared to a window anyway.
+ *        |      | "RAI\x1D"      | Acronyms for Random Access Index and 0x1D representing acronyms for
+ *        |      |                | "Index for Decompression" again in order to have some non-printable bytes to avoid
+ *        |      |                | misidentifying text files that happen to begin with RAI as this format.
+ * -------+------+----------------+---------------------------------------------------
+ *      4 |    1 | Format version | Can be thought of to belong to the magic bytes because any two
+ *        |      | 0x01           | versions are not ensured to be compatible with each other in any way.
+ * -------+------+----------------+---------------------------------------------------
+ *      5 |    8 | Archive Size   | Size in bytes of the archive belonging to this index as a 64-bit number.
+ * -------+------+----------------+---------------------------------------------------
+ *     13 |    1 | Member Flags   | Enable (1) or disable (0) members for the window information:
+ *        |      |                | Bit 0: Encoded Size
+ *        |      |                | Bit 1: Compressed Window Size
+ *        |      |                | Bit 2: Decompressed Window Size
+ *        |      |                | Bit 3: Window Offset
+ *        |      |                | Bit 4: 0
+ *        |      |                | Bit 5: 0
+ *        |      |                | Bit 6: 0
+ *        |      |                | Bit 7: 0
+ *        |      |                | If "Window Offset" is 1, "Compressed Window Size" must also be 1.
+ *        |      |                | If "Decompressed Window Size" is 1, "Compressed Window Size" must also be 1.
+ * -------+------+----------------+---------------------------------------------------
+ *     14 |    1 | Checksum Type  |  0 : None
+ *        |      |                |  1 : CRC-1 (parity bit)
+ *        |      |                |  2 : CRC-16
+ *        |      |                |  3 : CRC-32
+ *        |      |                |  4 : CRC-32C
+ *        |      |                |  5 : CRC-64
+ *        |      |                |  6 : Adler-32
+ *        |      |                | https://en.wikipedia.org/wiki/List_of_hash_functions
+ * -------+------+----------------+---------------------------------------------------
+ *     15 |    1 | Checksum Size  | Similar to Member Flags. A value of 0 disables the checksum member.
+ *        |      |                | Positive values represent the number of bytes for the checksum member.
+ *        |      |                | This means that checksums are limited to 255 B = 2040 bits.
+ *        |      |                | The largest common checksums known to me are 512 bits.
+ *        |      |                | https://en.wikipedia.org/wiki/List_of_hash_functions
+ *        |      |                | The checksum size must match the one implied by the checksum type.
+ * -------+------+----------------+---------------------------------------------------
+ *     16 |    1 | Archive Com-   | The archive compression type. It is redundant to the magic bytes header of
+ *        |      | pression Type  | the archive and therefore only functions as a hint or checksum that this index
+ *        |      |                | belongs to the correct archive. See "Window Compression Type" for possible values.
+ *        |      |                | If the value is 0, it should be ignored by the reader.
+ * -------+------+----------------+---------------------------------------------------
+ *     17 |    1 | Window Com-    | Value of the lowest 6 bits (bits 0-5):
+ *        |      | pression Type  |  0 : None
+ *        |      |                |  1 : Deflate
+ *        |      |                |  2 : Zlib
+ *        |      |                |  3 : Gzip
+ *        |      |                |  4 : Bzip2
+ *        |      |                |  5 : LZ4
+ *        |      |                |  6 : ZStandard
+ *        |      |                |  7 : LZMA
+ *        |      |                |  8 : XZ
+ *        |      |                |  9 : Brotli
+ *        |      |                | 10 : lzip
+ *        |      |                | 11 : lzop
+ *        |      |                | For compatibility, it is recommended to use a similar format to the archive
+ *        |      |                | compression type. I.e., only use zlib/gzip/deflate for window compression for
+ *        |      |                | zlib/gzip/deflate-compressed archives and only use bzip2 for bzip2-compressed
+ *        |      |                | archives.
+ *        |      |                | https://en.wikipedia.org/wiki/List_of_archive_formats
+ *        |      |                |
+ *        |      |                | Bit 6: 0
+ *        |      |                | Bit 7: Sparse window format. The (possibly decompressed) window data is in
+ *        |      |                |        sparse format as described below.
+ * -------+------+----------------+---------------------------------------------------
+ *     18 |    8 | Number of      | The number of chunks in the following "list of chunk information".
+ *        |      | Chunks         |
+ * -------+------+----------------+---------------------------------------------------
+ *     26 |    ? | List of Chunk  | The chunk information format is shown below.
+ *        |      | Information    |
+ * -------+------+----------------+---------------------------------------------------
+ *      ? |    ? | List of        | Each window is simply a raw stream of data, which might be compressed.
+ *        |      | Windows        | The decompressed window data might also be in sparse format
+ *
+ *
+ * Chunk Information Member
+ *  Size | Name           | Description
+ * ------+----------------+---------------------------------------------------
+ *     8 | encoded offset | Encoded / compressed chunk offset in bits as 64-bit number stored in little endian.
+ * ------+----------------+---------------------------------------------------
+ *     8 | decoded offset | Decoded / decompressed chunk offset in bytes. The decoded size is always given
+ *       |                | by the difference to the next chunk's decoded offset.
+ *       |                | This also implies that the last chunk information is not actually used
+ *       |                | but must be appended to define the implied "decoded size" and possibly
+ *       |                | "encoded size".
+ * ------+----------------+---------------------------------------------------
+ *     8 | encoded size   | (optional) Encoded / compressed chunk size in bits. If this is not given.
+ *       |                | it is to be determined by the difference to the last member offset.
+ * ------+----------------+---------------------------------------------------
+ *     8 | (compressed)   | (optional) The compressed window size in bits (!). The actually window storage
+ *       | window size    | size is rounded up to the next byte because windows must be byte-aligned.
+ *       |                | Gzip windows are 32 KiB, LZ4 windows 64 KiB at most.
+ *       |                | LZMA supports up to 4 GiB and zstd even larger but storing these
+ *       |                | would be unfeasible especially if they are this large after pruning unused symbols
+ *       |                | and after compression.
+ * ------+----------------+---------------------------------------------------
+ *     8 | window offset  | (optional) This offset in bytes is relative to the window data array.
+ *       |                | If window offset is not given, it begins at 0 and increases by ceil( "compressed
+ *       |                | window size" / 8 ) for the following chunk information. If the compressed window
+ *       |                | size is also not given, the windows are assumed to be empty / not necessary.
+ *       |                | It probably is not necessary to enabled this member. It could be used to reuse
+ *       |                | the same window for multiple chunks, but it will be a rare occurrence for this to
+ *       |                | make sense.
+ * ------+----------------+---------------------------------------------------
+ *     8 | decompressed   | (optional) The decompressed window size can be added to aid performance for
+ *       | window size    | window decompression or as a kind of check sum. In general, this information is
+ *       |                | redundant because it is implicitly given by "(compressed) window size" and the
+ *       |                | compressed window data stream. In contrast to the compressed window size, this is in bytes.
+ * ------+----------------+---------------------------------------------------
+ *     ? | checksum       | (optional) Checksum for the decompressed chunk data.
+ *
+ * Notes regarding the chunk information:
+ *  - The last chunk information is not actually used but must be appended to define the implied "decoded size".
+ *    All other entries beside "decoded offset" and "encoded offset" should be set to 0.
+ *  - If the "decoded size" is not enabled, chunks must be sorted by decoded offset.
+ *  - If the "encoded size" is not enabled, chunks must be sorted by encoded offset.
+ *
+ * Sparse Window Format:
+ *
+ *  - Input: vector of known size containing bytes.
+ *  - Interpretation of those bytes:
+ *    - List of interleaved raw window data vectors and "jumps" over unnecessary data
+ *     - Variable-length-encoded size of raw window data (may be 0)
+ *     - Raw window data
+ *     - Variable-length-encoded size of unknown/unneeded symbols to skip over (may be 0)
+ *  - Variable-length encoding:
+ *    - 0-127: raw number
+ *    - bit 7 set: bits 0-7 are the lowest bits of the number. The rest of the bits follow
+ *    -> It basically is a chained list of 7-bit packages that should be shifted from the left to the number
+ *       until a byte is encountered which has its highest bit set to 0.
+ *    - Example: [1|1000111] [1|0011010] [0|1000001] -> resulting number: 0b1000001'0011010'1000111 = 1068359
+ *
+ * There are multiple valid use cases for this index:
+ *  - bzip2 index file: all optional members except possibly the checksum are disabled because the encoded/decoded
+ *    offset are sufficient for random access.
+ *  - gzip with uncompressed windows (not recommended)
+ *  - zip: multiple compressed streams, which requires the "encoded size" member to effectively skip the zip glue
+ *         data.
+ *
+ * General Notes:
+ *
+ *  - All multi-byte numbers in the format described here are stored with
+ *    the least-significant byte first (at the lower memory address).
+ *  - Encoded/compressed offsets and sizes are always in bits, decompressed in bytes
+ * @endverbatim
+ */
+static constexpr std::string_view MAGIC_BYTES = "RAI\x1D";
+
+
+inline void
+writeGzipIndex( const GzipIndex&                                              index,
+                const std::function<void( const void* buffer, size_t size )>& checkedWrite )
+{
+    if ( !index.windows ) {
+        throw std::invalid_argument( "GzipIndex::windows must be a valid pointer!" );
+    }
+
+    const auto writeValue = [&checkedWrite] ( auto value ) { checkedWrite( &value, sizeof( value ) ); };
+
+    const auto& checkpoints = index.checkpoints;
+
+    if ( !std::all_of( checkpoints.begin(), checkpoints.end(), [&index] ( const auto& checkpoint ) {
+                           return static_cast<bool>( index.windows->get( checkpoint.compressedOffsetInBits ) );
+                       } ) )
+    {
+        throw std::invalid_argument( "Windows must exist for all offsets!" );
+    }
+
+    checkedWrite( /* magic bytes */ "RAI\x1D", 4 );
+    checkedWrite( /* format version */ "\x01", 1 );
+    writeValue( static_cast<uint64_t>( index.compressedSizeInBytes ) );  // 8 B
+
+    /* Checkpoints do not yet have compressedSizeInBits but it will be added for zip support. */
+#if 0
+    const auto encodedOffsetsAreConsecutive =
+        [&] () {
+            for ( size_t i = 0; i + 1 < checkpoints.size(); ++i ) {
+                if ( checkpoints[i].compressedOffsetInBits + checkpoints[i].compressedSizeInBits !=
+                     checkpoints[i + 1].compressedOffsetInBits )
+                {
+                    return false;
+                }
+            }
+            return true;
+        } ();
+    const auto hasEncodedSize = !encodedOffsetsAreConsecutive;
+#else
+    const auto hasEncodedSize = false;
+#endif
+
+    const auto hasNonEmptyWindows =
+            std::any_of( checkpoints.begin(), checkpoints.end(), [&index] ( const auto& checkpoint ) {
+                const auto window = index.windows->get( checkpoint.compressedOffsetInBits );
+                return window && !window->empty();
+            } );
+    const auto hasCompressedWindowSize = hasNonEmptyWindows;
+
+    const auto hasDecompressedWindowSize = true;
+    const auto hasWindowOffset = false;  // Windows are stored consecutively and therefore need no offset.
+
+    const auto flags = static_cast<uint8_t>( ( ( hasWindowOffset ? 1U : 0U ) << 3U )
+                                             | ( ( hasDecompressedWindowSize ? 1U : 0U ) << 2U )
+                                             | ( ( hasCompressedWindowSize ? 1U : 0U ) << 1U )
+                                             | ( hasEncodedSize ? 1U : 0U ) );
+    writeValue( flags );  // 1 B
+
+    /** @todo compute CRC32 checksums for each chunk and forward them to GzipIndex and write them out. */
+    const auto checksumType = ChecksumType::NONE;
+    writeValue( static_cast<uint8_t>( checksumType ) );  // 1 B
+    const uint8_t checksumSize{ 0 };
+    writeValue( checksumSize );  // 1 B
+
+    /** @todo Correctly support indexes for zlib and deflate archives. */
+    const auto archiveCompressionType = CompressionType::GZIP;
+    writeValue( static_cast<uint8_t>( archiveCompressionType ) );  // 1 B
+
+    /* Using gzip instead of deflate adds a bit of overhead for the header and footer but for most windows,
+     * this should be negligible and it has the advantage that each window is checksummed thanks to the gzip footer. */
+    const auto windowCompressionType = CompressionType::GZIP;
+    auto windowCompression = static_cast<uint8_t>( windowCompressionType );
+    const bool sparseCompression = false;  /** @todo implement this inside CompressedVector. */
+    if ( sparseCompression ) {
+        windowCompression |= SPARSE_FLAG;
+    }
+    writeValue( windowCompression );  // 1 B
+
+    writeValue( static_cast<uint64_t>( checkpoints.size() ) );  // 8 B
+
+    /* Write out list of chunk information. */
+
+    const auto& [lock, windows] = index.windows->data();
+
+    for ( const auto& checkpoint : checkpoints ) {
+        writeValue( static_cast<uint64_t>( checkpoint.compressedOffsetInBits ) );
+        writeValue( static_cast<uint64_t>( checkpoint.uncompressedOffsetInBytes ) );
+    #if 0
+        if ( hasEncodedSize ) {
+            writeValue( static_cast<uint64_t>( checkpoint.compressedSizeInBits ) );
+        }
+    #endif
+
+        if ( hasCompressedWindowSize ) {
+            const auto window = *windows->at( checkpoint.compressedOffsetInBits );
+            /** @todo compress windows in parallel if not already compressed!
+             *        There is a problem here! EIther I have to the compression twice only to find out the compressed
+             *        size to write out, or we have to hold all recompressed windows in memory!
+             *  @todo Maybe it really would be better to require all window compression types to be the same
+             *        and recompress them outside in parallel before calling writeGzipIndex.
+             *  @todo Or we might want to remember the file positions and then update the compressed sizes
+             *        as a post-processing step... But then we couldn't stream anymore.
+             *  @todo Or we could change the index format and order the windows contents before the metadata :/
+             *        like zip.
+             *  @todo Or we could allow mixed compression types. At least compression type non seems useful
+             *        to avoid unnecessary copies for decompression
+             */
+            if ( ( window.compressionType() == windowCompressionType ) || window.empty() ) {
+                writeValue( static_cast<uint64_t>( window.empty() ? 0U : window.compressedSize() * 8U ) );
+            } else {
+                const auto& decompressed = window.decompress();
+                if ( !decompressed ) {
+                    throw std::logic_error( "Did not get decompressed data for window!" );
+                }
+
+                const WindowMap::Window recompressed( *decompressed, windowCompressionType );
+                writeValue( static_cast<uint64_t>( recompressed.compressedSize() * 8U ) );
+            }
+
+            if ( hasWindowOffset ) {
+                throw std::logic_error( "Window offset not supported yet because it only adds overhead!" );
+            }
+
+            if ( hasDecompressedWindowSize ) {
+                writeValue( static_cast<uint64_t>( window.decompressedSize() ) );
+            }
+        } else {
+            if ( hasWindowOffset ) {
+                throw std::logic_error( "Window offset has no meaning without compressed window size!" );
+            }
+            if ( hasDecompressedWindowSize ) {
+                throw std::logic_error( "Decompressed window size has no meaning without compressed window size!" );
+            }
+        }
+
+        if ( checksumSize > 0 ) {
+            throw std::logic_error( "Checksum writing not yet implemented!" );
+        }
+    }
+
+    /* Write out compressed window data. */
+
+    for ( const auto& checkpoint : checkpoints ) {
+        const auto window = *windows->at( checkpoint.compressedOffsetInBits );
+        if ( window.empty() ) {
+            continue;
+        }
+
+        if ( window.compressionType() == windowCompressionType ) {
+            const auto& compressedData = window.compressedData();
+            if ( !compressedData ) {
+                throw std::logic_error( "Did not get compressed data for window!" );
+            }
+            checkedWrite( compressedData->data(), compressedData->size() );
+        } else {
+            const auto& decompressed = window.decompress();
+            if ( !decompressed ) {
+                throw std::logic_error( "Did not get decompressed data for window!" );
+            }
+
+            /** @todo compress windows in parallel if not already compressed! */
+            WindowMap::Window recompressed( *decompressed, windowCompressionType );
+            std::cerr << "Write out window sized: " << decompressed->size() << " recompressed to "
+                      << toString( windowCompressionType ) << " size: " << recompressed.compressedSize() << "\n";
+            const auto& compressedData = recompressed.compressedData();
+            if ( !compressedData ) {
+                throw std::logic_error( "Did not get compressed data for window!" );
+            }
+
+            checkedWrite( compressedData->data(), compressedData->size() );
+        }
+    }
+}
+
+
+[[nodiscard]] inline GzipIndex
+readGzipIndex( UniqueFileReader            indexFile,
+               const std::optional<size_t> archiveSize = std::nullopt,
+               const std::vector<char>&    alreadyReadBytes = {} )
+{
+    if ( !indexFile ) {
+        throw std::invalid_argument( "Index file reader must be valid!" );
+    }
+
+    static constexpr size_t HEADER_BUFFER_SIZE = MAGIC_BYTES.size() + /* version */ 1U + sizeof( uint64_t );
+
+    if ( alreadyReadBytes.size() > HEADER_BUFFER_SIZE ) {
+        throw std::invalid_argument( "This function only supports skipping up to over the magic bytes if given." );
+    }
+    if ( alreadyReadBytes.size() != indexFile->tell() ) {
+        throw std::invalid_argument( "The file position must match the number of given bytes." );
+    }
+
+    auto headerBytes = alreadyReadBytes;
+    if ( headerBytes.size() < HEADER_BUFFER_SIZE ) {
+        const auto oldSize = headerBytes.size();
+        headerBytes.resize( HEADER_BUFFER_SIZE );
+        checkedRead( indexFile.get(), headerBytes.data() + oldSize, headerBytes.size() - oldSize );
+    }
+
+    if ( !std::equal( MAGIC_BYTES.begin(), MAGIC_BYTES.end(), headerBytes.begin() ) ) {
+        throw std::invalid_argument( "Magic bytes do not match!" );
+    }
+
+    const auto headerBytesReader = std::make_unique<BufferViewFileReader>( headerBytes.data(), headerBytes.size() );
+    headerBytesReader->seekTo( MAGIC_BYTES.size() );
+    const auto formatVersion = readValue<uint8_t>( headerBytesReader.get() );
+    if ( formatVersion > 1 ) {
+        throw std::invalid_argument( "Index was written with a newer rapidgzip version than supported!" );
+    }
+
+    /* Read index header. */
+    GzipIndex index;
+    index.compressedSizeInBytes = readValue<uint64_t>( headerBytesReader.get() );
+    const auto memberFlags = readValue<uint8_t>( indexFile.get() );
+    const auto checksumType = static_cast<ChecksumType>( readValue<uint8_t>( indexFile.get() ) );
+    const auto checksumSize = readValue<uint8_t>( indexFile.get() );
+    const auto archiveCompressionType = static_cast<CompressionType>( readValue<uint8_t>( indexFile.get() ) );
+    const auto windowCompression = readValue<uint8_t>( indexFile.get() );
+    const auto chunkCount = readValue<uint64_t>( indexFile.get() );
+
+    /* Check archive size and type. */
+    if ( archiveSize && ( *archiveSize != index.compressedSizeInBytes ) ) {
+        std::stringstream message;
+        message << "Archive size does not match! Archive is " << formatBytes( *archiveSize )
+                << " but index has stored an archive size of " << formatBytes( index.compressedSizeInBytes )
+                << "!";
+        throw std::invalid_argument( std::move( message ).str() );
+    }
+
+    if ( archiveCompressionType != CompressionType::GZIP ) {
+        /** @todo Add support for zlib and deflate. */
+        throw std::invalid_argument( "Currently, only gzip archives are supported!" );
+    }
+
+    /* Check flags for validity. */
+    const auto hasEncodedSize            = ( memberFlags & 1U ) != 0U;
+    const auto hasCompressedWindowSize   = ( memberFlags & ( 1U << 1U ) ) != 0U;
+    const auto hasDecompressedWindowSize = ( memberFlags & ( 1U << 2U ) ) != 0U;
+    const auto hasWindowOffset           = ( memberFlags & ( 1U << 3U ) ) != 0U;
+
+    if ( hasWindowOffset && !hasCompressedWindowSize ) {
+        throw std::invalid_argument( "Window offset member makes no sense without the compressed window size!" );
+    }
+    if ( hasDecompressedWindowSize && !hasCompressedWindowSize ) {
+        throw std::invalid_argument( "Decompressed window size makes no sense without the compressed window size!" );
+    }
+    if ( ( memberFlags >> 4U ) != 0U ) {
+        throw std::invalid_argument( "The higher member flag bits are set even though they should be unused at 0!" );
+    }
+
+    /* Check compression types for validity. */
+    const auto sparseFlag = ( windowCompression & SPARSE_FLAG ) != 0U;
+    if ( sparseFlag ) {
+        /** @todo Add support for this inside the CompressedVector interface! */
+        throw std::invalid_argument( "Sparse window compression not yet supported!" );
+    }
+    const auto windowCompressionType = static_cast<CompressionType>( windowCompression & WINDOW_COMPRESSION_TYPE_MASK );
+
+    const std::unordered_set supportedCompressionTypes = { CompressionType::NONE, CompressionType::GZIP };
+    if ( !contains( supportedCompressionTypes, windowCompressionType ) ) {
+        std::stringstream message;
+        message << "Window compression type " << toString( windowCompressionType ) << " is currently not supported!";
+        throw std::invalid_argument( std::move( message ).str() );
+    }
+    const auto expectedChecksumSize = getChecksumSize( checksumType );
+    if ( expectedChecksumSize && ( checksumSize != expectedChecksumSize ) ) {
+        std::stringstream message;
+        message << "Expected checksum size for " << toString( checksumType ) << " to be "
+                << formatBytes( *expectedChecksumSize ) << " but got: " << formatBytes( checksumSize ) << "!";
+        throw std::invalid_argument( std::move( message ).str() );
+    }
+
+    std::vector<std::pair<size_t, size_t> > windowSizes;
+    std::vector<size_t> checksum( checksumSize );
+
+    /* Read chunk info metadata. */
+    for ( size_t i = 0; i < chunkCount; ++i ) {
+        auto& checkpoint = index.checkpoints.emplace_back();
+        checkpoint.compressedOffsetInBits = readValue<uint64_t>( indexFile.get() );
+        checkpoint.uncompressedOffsetInBytes = readValue<uint64_t>( indexFile.get() );
+
+        if ( hasEncodedSize ) {
+            /** @todo Support for this should be added with ZIP support. */
+            throw std::invalid_argument( "Indexes with independent encoded chunk sizes are not supported yet!" );
+        }
+
+        size_t compressedWindowSize{ 0 };
+        size_t decompressedWindowSize{ 0 };
+
+        if ( hasCompressedWindowSize ) {
+            compressedWindowSize = readValue<uint64_t>( indexFile.get() );
+            if ( !hasDecompressedWindowSize ) {
+                throw std::invalid_argument( "The decompressed window size is currently required if there are "
+                                             "windows!" );
+            }
+        }
+        if ( hasWindowOffset ) {
+            throw std::invalid_argument( "Indexes with independent window offset not supported yet!" );
+        }
+        if ( hasDecompressedWindowSize ) {
+            /* Ignore for now. Could be used to allocate the decompression buffer or check the decompressed windows. */
+            decompressedWindowSize = readValue<uint64_t>( indexFile.get() );
+        }
+        /** @todo fully add checksum data to the checkpoint and verify it during decompression. */
+        checkedRead( indexFile.get(), checksum.data(), checksum.size() );
+
+        if ( hasCompressedWindowSize ) {
+            windowSizes.emplace_back( compressedWindowSize, decompressedWindowSize );
+        }
+    }
+
+    /* Read window data. */
+    index.windows = std::make_shared<WindowMap>();
+    for ( size_t i = 0; i < index.checkpoints.size(); ++i ) {
+        const auto& checkpoint = index.checkpoints.at( i );
+
+        if ( !hasCompressedWindowSize ) {
+            index.windows->emplaceShared( checkpoint.compressedOffsetInBits, {} );
+            continue;
+        }
+
+        const auto [windowSize, decompressedWindowSize] = windowSizes[i];
+        if ( windowSize % 8U != 0U ) {
+            if ( windowCompressionType != CompressionType::DEFLATE ) {
+                std::stringstream message;
+                message << "Non-byte-aligned window sizes only make sense for deflate compression but the compression "
+                        << "type is: " << toString( windowCompressionType ) << "!";
+                throw std::logic_error( std::move( message ).str() );
+            }
+            throw std::invalid_argument( "Non-byte-aligned window sizes are not supported yet!" );
+        }
+
+        FasterVector<uint8_t> windowData( ceilDiv( windowSize, 8U ) );
+        checkedRead( indexFile.get(), windowData.data(), windowData.size() );
+        /** @todo add support to automatically determine the decompressed size. */
+        index.windows->emplaceShared( checkpoint.compressedOffsetInBits,
+                                      std::make_shared<WindowMap::Window>( std::move( windowData ),
+                                                                           decompressedWindowSize,
+                                                                           windowCompressionType ) );
+    }
+
+    return index;
+}
+}  // RandomAccessIndex
 
 
 namespace bgzip
@@ -1038,6 +1653,13 @@ readGzipIndex( UniqueFileReader indexFile,
     std::optional<size_t> archiveSize;
     if ( archiveFile ) {
         archiveSize = archiveFile->size();
+    }
+
+    if ( const auto commonSize = std::min( formatId.size(), RandomAccessIndex::MAGIC_BYTES.size() );
+         std::string_view( formatId.data(), commonSize )
+         == std::string_view( RandomAccessIndex::MAGIC_BYTES.data(), commonSize ) )
+    {
+        return RandomAccessIndex::readGzipIndex( std::move( indexFile ), archiveSize, formatId );
     }
 
     if ( const auto commonSize = std::min( formatId.size(), indexed_gzip::MAGIC_BYTES.size() );
