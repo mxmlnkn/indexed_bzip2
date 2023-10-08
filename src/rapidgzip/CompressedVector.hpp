@@ -123,6 +123,15 @@ public:
         m_decompressedSize( toCompress.size() )
     {}
 
+    [[deprecated]] explicit
+    CompressedVector( Container&&           compressedData,
+                      const size_t          decompressedSize,
+                      const CompressionType compressionType ) :
+        m_compressionType( compressionType ),
+        m_data( std::make_shared<Container>( std::move( compressedData ) ) ),
+        m_decompressedSize( decompressedSize )
+    {}
+
     [[nodiscard]] CompressionType
     compressionType() const noexcept
     {
