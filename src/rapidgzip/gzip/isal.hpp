@@ -644,7 +644,8 @@ inflateWithIsal( const Container& toDecompress,
 
     const auto result = isal_inflate_stateless( &stream );
     if ( result != ISAL_DECOMP_OK ) {
-        throw std::runtime_error( "Decompression failed with error code: " + std::to_string( result ) );
+        throw std::runtime_error( "Decompression of " + std::to_string( toDecompress.size() ) + "B sized vector "
+                                  "failed with error code: " + std::to_string( result ) );
     }
     if ( stream.avail_out > 0 ) {
         std::stringstream message;
