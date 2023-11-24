@@ -2,7 +2,7 @@ name: Build Conda Packages
 
 on:
   push:
-    branches: 'master'
+    branches: 'rapidgzip-v0.10.x'
 
 jobs:
   Build-Conda:
