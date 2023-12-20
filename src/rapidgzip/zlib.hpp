@@ -168,7 +168,7 @@ private:
     /**
      * Only works on and modifies m_stream.avail_in and m_stream.next_in.
      */
-    std::optional<Footer>
+    Footer
     readGzipFooter();
 
     void
@@ -298,9 +298,7 @@ ZlibInflateWrapper::readStream( uint8_t* const output,
             std::optional<Footer> footer;
             if ( m_windowFlags < 0 ) {
                 footer = readGzipFooter();
-                if ( footer ) {
-                    readGzipHeader();
-                }
+                readGzipHeader();
             }
 
             m_stream.next_out = output + decodedSize;
@@ -318,7 +316,7 @@ ZlibInflateWrapper::readStream( uint8_t* const output,
 }
 
 
-inline std::optional<ZlibInflateWrapper::Footer>
+inline ZlibInflateWrapper::Footer
 ZlibInflateWrapper::readGzipFooter()
 {
     gzip::Footer footer{ 0, 0 };
@@ -342,7 +340,7 @@ ZlibInflateWrapper::readGzipFooter()
             m_stream.avail_in = 0;
             refillBuffer();
             if ( m_stream.avail_in == 0 ) {
-                return std::nullopt;
+                throw BitReader::EndOfFileReached();
             }
         }
     }
