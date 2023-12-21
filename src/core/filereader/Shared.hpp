@@ -17,6 +17,11 @@
 #include <Statistics.hpp>
 
 #include "FileReader.hpp"
+
+#ifdef WITH_PYTHON_SUPPORT
+    #include "Python.hpp"
+#endif
+
 #ifndef _MSC_VER
     #include "Standard.hpp"
 #endif
@@ -314,14 +319,44 @@ public:
                                      "set an error again right away, which makes this interface useless." );
     }
 
+    /**
+     * In order to avoid deadlocks where:
+     * - Thread 1 has the GIL and tries to acquire the SharedFileReader lock
+     * - Thread 2 has the SharedFileReader lock and tries to acquire the GIL
+     * this enforces a fixed lock order
+     * The order per se locks the std::mutex first and only then acquires the GIL.
+     * The other way around has been proven to not work because the GIL gets released at seemingly
+     * arbitrary points, in the given test case inside PythonFileReader::read -> PyObject_Call somewhere
+     * between PyObject_Call and _Py_Read, which tries to lock the GIL again, which might deadlock.
+     * But then there is the Python main thread, which has the GIL already locked when calling into this function!
+     * This messes up our lock order, so therefore, we need to try to unlock the GIL before trying to lock
+     * @ref m_fileLock. In case it already is unlocked, then ScopedGILUnlock will not do anything.
+     */
+    struct FileLock
+    {
+        explicit
+        FileLock( std::mutex& mutex ) :
+            m_fileLock( mutex )
+        {}
+
+    private:
+    #ifdef WITH_PYTHON_SUPPORT
+        const ScopedGILUnlock m_globalInterpreterUnlock;
+    #endif
+        const std::unique_lock<std::mutex> m_fileLock;
+    #ifdef WITH_PYTHON_SUPPORT
+        const ScopedGILLock m_globalInterpreterLock;
+    #endif
+    };
+
 private:
-    [[nodiscard]] std::scoped_lock<std::mutex>
+    [[nodiscard]] std::unique_ptr<FileLock>
     getLock() const
     {
         if ( m_statistics && m_statistics->enabled ) {
             ++m_statistics->locks;
         }
-        return std::scoped_lock( *m_mutex );
+        return std::make_unique<FileLock>( *m_mutex );
     }
 
 private:
