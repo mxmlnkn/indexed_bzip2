@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 
 if __name__ == '__main__' and __package__ is None:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -119,6 +120,12 @@ def writeCompressedFile(data, compressionLevel, encoder):
         compressedFile.write(bz2.compress(data, compressionLevel))
     elif encoder == 'pygzip':
         compressedFile.write(gzip.compress(data, compressionLevel))
+    elif encoder == 'pyzlib':
+        compressedFile.write(zlib.compress(data, compressionLevel))
+    elif encoder == 'pydeflate':
+        compressor = zlib.compressobj(wbits=-15)
+        compressedFile.write(compressor.compress(data))
+        compressedFile.write(compressor.flush())
     else:
         compressedFile.write(subprocess.check_output([encoder, '-{}'.format(compressionLevel)], input=data))
     checkedSeek(compressedFile, 0)
@@ -341,11 +348,9 @@ def triggerDeadlock(filePath):
     print("Open test file...")
     with open(filePath, 'rb') as fp:
         wrapper = FileWrapper(fp)  # deadlock only seems to happen with a Python wrapper
-        with RapidgzipFile(wrapper, verbose=True, parallelization = 4) as fd:
+        with RapidgzipFile(wrapper, verbose=True, parallelization=4) as fd:
             for i in range(100):
-                print(f"{i}: seek to 0")
                 fd.seek(0)
-                print(f"{i}: seek to 1000")
                 fd.seek(1000)
 
 
@@ -359,7 +364,7 @@ def testDeadlock(encoder):
     # We need at least something larger than the chunk size.
     rawFile, compressedFile = createRandomCompressedFile(100 * 1024 * 1024, 6, 'pygzip')
 
-    task = multiprocessing.Process(target=testTriggerDeadlock, args = (compressedFile.name,))
+    task = multiprocessing.Process(target=testTriggerDeadlock, args=(compressedFile.name,))
     task.start()
     print("Started test process")
     task.join(10)
@@ -369,10 +374,21 @@ def testDeadlock(encoder):
         sys.exit(1)
 
 
+def testFileTypeAPI(format):
+    rawFile, gzipFile = createRandomCompressedFile(1024, 6, 'py' + format)
+    with RapidgzipFile(gzipFile.name) as decompressedGzipFile:
+        print("File Type:", decompressedGzipFile.file_type())
+        assert decompressedGzipFile.file_type() == format
+
+
 if __name__ == '__main__':
     print("indexed_bzip2 version:", indexed_bzip2.__version__)
     print("rapidgzip version:", rapidgzip.__version__)
     print("Cores:", os.cpu_count())
+
+    testFileTypeAPI('gzip')
+    testFileTypeAPI('zlib')
+    testFileTypeAPI('deflate')
 
     testDeadlock('pygzip')
 

@@ -42,7 +42,6 @@ template<typename T_ChunkData = ChunkData,
          bool ENABLE_STATISTICS = false>
 class ParallelGzipReader final :
     public FileReader
-
 {
 public:
     using ChunkData = T_ChunkData;
@@ -900,6 +899,25 @@ public:
     setKeepIndex( bool keep )
     {
         m_keepIndex = keep;
+    }
+
+    [[nodiscard]] std::string
+    fileTypeAsString()
+    {
+        switch ( blockFinder().fileType() )
+        {
+        case FileType::NONE:
+            return "";
+        case FileType::DEFLATE:
+            return "deflate";
+        case FileType::BGZF:
+            return "bgzf";
+        case FileType::GZIP:
+            return "gzip";
+        case FileType::ZLIB:
+            return "zlib";
+        }
+        throw std::invalid_argument( "Unknown file type!" );
     }
 
 private:
