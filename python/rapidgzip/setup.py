@@ -287,12 +287,24 @@ class Build(build_ext):
                 '-fconstexpr-steps=99000100',
                 '-std=c++17',
                 '/std:c++17',
+                '/experimental:c11atomics',
             ]
-            if 'extra_postargs' in kwargs:
-                kwargs['extra_postargs'] = [x for x in kwargs['extra_postargs'] if x not in cppCompileArgs]
+            cppPostArgs = kwargs.get('extra_postargs', [])
+            postArgs = [x for x in cppPostArgs if x not in cppCompileArgs]
 
             if cSources:
-                objects.extend(oldCompile(cSources, *args, **kwargs))
+                for cSource in cSources:
+                    if 'extra_postargs' in kwargs and any(name in cSource for name in lz4_sources):
+                        kwargs['extra_postargs'] = postArgs + [
+                            argument.replace('c++17', 'c17') for argument in cppPostArgs if 'c++17' in argument
+                        ]
+                    objects.extend(oldCompile([cSource], *args, **kwargs))
+                    # We cannot have -std=c17 when compiling when compiling ISA-L!
+                    if 'extra_postargs' in kwargs:
+                        kwargs['extra_postargs'] = postArgs
+
+            if 'extra_postargs' in kwargs:
+                kwargs['extra_postargs'] = postArgs
 
             if nasmSources and nasmCompiler:
                 nasm_kwargs = copy.deepcopy(kwargs)
@@ -379,6 +391,7 @@ class Build(build_ext):
             elif self.compiler.compiler_type == 'msvc':
                 ext.extra_compile_args = [
                     '/std:c++17',
+                    '/experimental:c11atomics',
                     '/O2',
                     '/DNDEBUG',
                     '/DWITH_PYTHON_SUPPORT',
