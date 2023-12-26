@@ -1,4 +1,11 @@
 
+# Version 0.12.0 built on 2023-12-26
+
+## Features
+
+ - Add support for zlib and raw deflate files.
+
+
 # Version 0.11.1 built on 2023-12-22
 
 ## Fixes
