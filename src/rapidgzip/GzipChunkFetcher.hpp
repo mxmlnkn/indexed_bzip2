@@ -1083,7 +1083,6 @@ public:
 
                 case StoppingPoint::END_OF_BLOCK_HEADER:
                     if ( ( ( nextBlockOffset >= untilOffset )
-                           && !inflateWrapper.isLastBlock()
                            && ( inflateWrapper.compressionType() != deflate::CompressionType::FIXED_HUFFMAN ) )
                          || ( nextBlockOffset == untilOffset ) ) {
                         stoppingPointReached = true;
@@ -1276,7 +1275,6 @@ public:
              *       counts that as an error anyway!
              */
             if ( ( ( nextBlockOffset >= untilOffset )
-                   && !block->isLastBlock()
                    && ( block->compressionType() != deflate::CompressionType::FIXED_HUFFMAN ) )
                  || ( nextBlockOffset == untilOffset ) ) {
                 break;

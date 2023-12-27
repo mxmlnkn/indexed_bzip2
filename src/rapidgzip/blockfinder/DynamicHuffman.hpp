@@ -38,12 +38,8 @@ isDeflateCandidate( uint32_t bits )
         return false;
     } else {
         /* Bit 0: final block flag */
-        const auto isLastBlock = ( bits & 1U ) != 0;
         bits >>= 1U;
-        bool matches = !isLastBlock;
-        if constexpr ( bitCount <= 1U ) {
-            return matches;
-        }
+        bool matches = true;
 
         /* Bits 1-2: compression type */
         const auto compressionType = bits & nLowestBitsSet<uint32_t, 2U>();

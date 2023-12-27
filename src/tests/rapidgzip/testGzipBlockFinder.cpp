@@ -27,10 +27,7 @@ isValidDynamicHuffmanBlock( uint32_t bits )
 {
     using namespace rapidgzip::deflate;
 
-    const auto finalBlock = bits & nLowestBitsSet<uint32_t, 1U>();
-    if ( finalBlock == 0b1 ) {
-        return false;
-    }
+    /* Ignore final block bit. */
     bits >>= 1U;
 
     const auto compressionType = bits & nLowestBitsSet<uint32_t, 2U>();
@@ -55,25 +52,25 @@ testDynamicHuffmanBlockFinder()
 {
     using namespace rapidgzip::blockfinder;
 
-    /* Note that it non-final dynamic blocks must begin with 0b100 (bits are read from lowest to highest bit).
+    /* Note dynamic blocks must begin with 0b10[01] (bits are read from lowest to highest bit).
      * From that we can already construct some tests. */
     REQUIRE( nextDeflateCandidate<0>( 0b0 ) == 0 );
-    REQUIRE( nextDeflateCandidate<1>( 0b1 ) == 1 );
+    REQUIRE( nextDeflateCandidate<1>( 0b1 ) == 0 );
     REQUIRE( nextDeflateCandidate<1>( 0b0 ) == 0 );
 
-    REQUIRE( nextDeflateCandidate<2>( 0b01 ) == 1 );
+    REQUIRE( nextDeflateCandidate<2>( 0b01 ) == 0 );
     REQUIRE( nextDeflateCandidate<2>( 0b00 ) == 0 );
-    REQUIRE( nextDeflateCandidate<2>( 0b11 ) == 2 );
-    REQUIRE( nextDeflateCandidate<2>( 0b10 ) == 2 );
+    REQUIRE( nextDeflateCandidate<2>( 0b11 ) == 1 );
+    REQUIRE( nextDeflateCandidate<2>( 0b10 ) == 1 );
 
     REQUIRE( nextDeflateCandidate<3>( 0b001 ) == 1 );
     REQUIRE( nextDeflateCandidate<3>( 0b000 ) == 1 );
-    REQUIRE( nextDeflateCandidate<3>( 0b011 ) == 2 );
-    REQUIRE( nextDeflateCandidate<3>( 0b010 ) == 2 );
-    REQUIRE( nextDeflateCandidate<3>( 0b101 ) == 3 );
+    REQUIRE( nextDeflateCandidate<3>( 0b011 ) == 1 );
+    REQUIRE( nextDeflateCandidate<3>( 0b010 ) == 1 );
+    REQUIRE( nextDeflateCandidate<3>( 0b101 ) == 0 );
     REQUIRE( nextDeflateCandidate<3>( 0b100 ) == 0 );
-    REQUIRE( nextDeflateCandidate<3>( 0b111 ) == 3 );
-    REQUIRE( nextDeflateCandidate<3>( 0b110 ) == 3 );
+    REQUIRE( nextDeflateCandidate<3>( 0b111 ) == 2 );
+    REQUIRE( nextDeflateCandidate<3>( 0b110 ) == 2 );
 
     REQUIRE( nextDeflateCandidate< 8>( 0x7CU ) == 0 );
     REQUIRE( nextDeflateCandidate<10>( 0x7CU ) == 0 );
