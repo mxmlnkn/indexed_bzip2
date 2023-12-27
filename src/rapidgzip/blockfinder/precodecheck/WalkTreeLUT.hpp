@@ -202,10 +202,9 @@ precodesToHistogram( uint64_t precodeBits )
 
 
 /**
- * @todo Correctly parameterize everything so that it works with other values than 5.
- * 4 * 5 = 20 bits LUT map to bool, i.e., 2^17 B = 512 KiB! -> segfault
+ * 4 * 5 = 20 bits LUT map to bool, i.e., 2^17 B = 512 KiB!
  * 5 * 5 = 25 bits LUT map to bool, i.e., 2^22 B =   4 MiB!
- * 6 * 5 = 30 bits LUT map to bool, i.e., 2^27 B =  32 MiB! -> testPrecodeCheck fails
+ * 6 * 5 = 30 bits LUT map to bool, i.e., 2^27 B =  32 MiB!
  */
 static constexpr auto PRECODE_FREQUENCIES_LUT_COUNT = 5U;
 static constexpr auto PRECODE_FREQUENCIES_1_TO_5_VALID_LUT =

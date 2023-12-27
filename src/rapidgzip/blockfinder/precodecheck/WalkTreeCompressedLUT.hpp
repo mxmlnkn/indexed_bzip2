@@ -86,7 +86,7 @@ checkPrecode( const uint64_t next4Bits,
     const auto valueToLookUp = bitLengthFrequencies >> UNIFORM_FREQUENCY_BITS;  // ignore non-zero-counts
     /* Lookup in LUT and subtable */
     {
-        constexpr auto HISTOGRAM_TO_LOOK_UP_BITS = 5U * UNIFORM_FREQUENCY_BITS;
+        constexpr auto HISTOGRAM_TO_LOOK_UP_BITS = PRECODE_FREQUENCIES_LUT_COUNT * UNIFORM_FREQUENCY_BITS;
         const auto& [histogramLUT, validLUT] = COMPRESSED_PRECODE_FREQUENCIES_1_TO_5_VALID_LUT_DICT;
         constexpr auto INDEX_BITS = COMPRESSED_PRECODE_FREQUENCIES_1_TO_5_INDEX_BITS;
         const auto elementIndex = ( valueToLookUp >> INDEX_BITS )
