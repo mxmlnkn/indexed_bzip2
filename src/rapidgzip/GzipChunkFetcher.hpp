@@ -1078,12 +1078,12 @@ public:
                     break;
 
                 case StoppingPoint::END_OF_BLOCK:
-                    isBlockStart = !inflateWrapper.isFinalBlock();
+                    isBlockStart = !inflateWrapper.isLastBlock();
                     break;
 
                 case StoppingPoint::END_OF_BLOCK_HEADER:
                     if ( ( ( nextBlockOffset >= untilOffset )
-                           && !inflateWrapper.isFinalBlock()
+                           && !inflateWrapper.isLastBlock()
                            && ( inflateWrapper.compressionType() != deflate::CompressionType::FIXED_HUFFMAN ) )
                          || ( nextBlockOffset == untilOffset ) ) {
                         stoppingPointReached = true;
