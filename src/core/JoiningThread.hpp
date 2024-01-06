@@ -19,7 +19,7 @@ public:
 
     ~RpmallocThreadInit()
     {
-        rpmalloc_thread_finalize();
+        rpmalloc_thread_finalize( /* release caches */ true );
     }
 };
 #endif

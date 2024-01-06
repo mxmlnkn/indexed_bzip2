@@ -12,7 +12,7 @@ class RpmallocInit
 public:
     RpmallocInit()
     {
-        rpmalloc_initialize( nullptr );
+        rpmalloc_initialize();
     }
 
     ~RpmallocInit()
