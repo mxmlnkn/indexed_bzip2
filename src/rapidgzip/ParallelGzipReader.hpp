@@ -620,14 +620,8 @@ public:
             return {};
         }
 
-        const auto archiveSize = m_sharedFileReader->size();
-        if ( !archiveSize ) {
-            std::cerr << "[Warning] The input file size should have become available after finalizing the index!\n";
-            std::cerr << "[Warning] Will use the last chunk end offset as size. This might lead to errors on import!\n";
-        }
-
         GzipIndex index;
-        index.compressedSizeInBytes = archiveSize ? *archiveSize : ceilDiv( offsets.rbegin()->first, 8U );
+        index.compressedSizeInBytes = ceilDiv( offsets.rbegin()->first, 8U );
         index.uncompressedSizeInBytes = offsets.rbegin()->second;
         index.windowSizeInBytes = 32_Ki;
 
