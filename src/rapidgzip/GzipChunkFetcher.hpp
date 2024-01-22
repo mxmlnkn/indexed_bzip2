@@ -91,6 +91,7 @@ public:
     public:
         mutable std::mutex mutex;
         uint64_t preemptiveStopCount{ 0 };
+        double queuePostProcessingDuration{ 0 };
     };
 
 public:
@@ -145,6 +146,8 @@ public:
             out << "    Time spent allocating and copying        : " << m_statistics.appendDuration << " s\n";
             out << "    Time spent applying the last window      : " << m_statistics.applyWindowDuration << " s\n";
             out << "    Time spent computing the checksum        : " << m_statistics.computeChecksumDuration << " s\n";
+            out << "    Time spent queuing post-processing       : " << m_statistics.queuePostProcessingDuration
+                << " s\n";
             out << "    Replaced marker buffers                  : " << formatBytes( m_statistics.markerCount ) << "\n";
             if constexpr ( ENABLE_REAL_MARKER_COUNT ) {
                 out << "    Actual marker count                      : " << formatBytes( m_statistics.realMarkerCount );
@@ -315,7 +318,7 @@ private:
                               const std::vector<typename ChunkData::Subchunk>& subchunks,
                               const FasterVector<uint8_t>&                     lastWindow )
     {
-        for ( const auto boundary : subchunks ) {
+        for ( const auto& boundary : subchunks ) {
             m_blockMap->push( boundary.encodedOffset, boundary.encodedSize, boundary.decodedSize );
             m_blockFinder->insert( boundary.encodedOffset + boundary.encodedSize );
         }
@@ -329,7 +332,7 @@ private:
             const auto lookupKey = !BaseType::test( chunkOffset ) && BaseType::test( partitionOffset )
                                    ? partitionOffset
                                    : chunkOffset;
-            for ( const auto boundary : subchunks ) {
+            for ( const auto& boundary : subchunks ) {
                 /* This condition could be removed but makes the map slightly smaller. */
                 if ( boundary.encodedOffset != chunkOffset ) {
                     m_unsplitBlocks.emplace( boundary.encodedOffset, lookupKey );
@@ -367,15 +370,25 @@ private:
             throw std::logic_error( std::move( message ).str() );
         }
 
+        const auto t0 = now();
+
         size_t decodedOffsetInBlock{ 0 };
         for ( const auto& subchunk : subchunks ) {
             decodedOffsetInBlock += subchunk.decodedSize;
             const auto windowOffset = subchunk.encodedOffset + subchunk.encodedSize;
             /* Avoid recalculating what we already emplaced in waitForReplacedMarkers when calling getLastWindow. */
             if ( !m_windowMap->get( windowOffset ) ) {
-                m_windowMap->emplace( windowOffset, chunkData->getWindowAt( lastWindow, decodedOffsetInBlock ) );
+                if ( subchunk.window ) {
+                    m_windowMap->emplaceShared( windowOffset, subchunk.window );
+                } else {
+                    m_windowMap->emplace( windowOffset, chunkData->getWindowAt( lastWindow, decodedOffsetInBlock ) );
+                    std::cerr << "[Info] The subchunk window for offset " << windowOffset << " is not compressed yet. "
+                              << "Compressing it now might slow down the program.\n";
+                }
             }
         }
+
+        m_statistics.queuePostProcessingDuration += duration( t0 );
     }
 
     void
@@ -385,7 +398,7 @@ private:
         if constexpr ( REPLACE_MARKERS_IN_PARALLEL ) {
             waitForReplacedMarkers( chunkData, lastWindow );
         } else {
-            replaceMarkers( chunkData, lastWindow );
+            replaceMarkers( chunkData, lastWindow, m_windowMap->compressionType() );
         }
     }
 
@@ -400,6 +413,8 @@ private:
             return;
         }
 
+        const auto t0 = now();
+
         /* Not ready or not yet queued, so queue it and use the wait time to queue more marker replacements. */
         std::optional<std::future<void> > queuedFuture;
         if ( markerReplaceFuture == m_markersBeingReplaced.end() ) {
@@ -412,8 +427,9 @@ private:
             markerReplaceFuture = m_markersBeingReplaced.emplace(
                 chunkData->encodedOffsetInBits,
                 this->submitTaskWithHighPriority(
-                    [this, chunkData, lastWindow] () { replaceMarkers( chunkData, lastWindow ); }
-                )
+                    [this, chunkData, lastWindow, compressionType = m_windowMap->compressionType()] () {
+                        replaceMarkers( chunkData, lastWindow, compressionType );
+                    } )
             ).first;
         }
 
@@ -433,14 +449,15 @@ private:
             }
         }
 
-        replaceMarkersInPrefetched();
+        queuePrefetchedChunkPostProcessing();
+        m_statistics.queuePostProcessingDuration += duration( t0 );
 
         markerReplaceFuture->second.get();
         m_markersBeingReplaced.erase( markerReplaceFuture );
     }
 
     void
-    replaceMarkersInPrefetched()
+    queuePrefetchedChunkPostProcessing()
     {
         /* Trigger jobs for ready block data to replace markers. */
         const auto& cacheElements = this->prefetchCache().contents();
@@ -467,7 +484,7 @@ private:
             if ( !sharedPreviousWindow ) {
                 continue;
             }
-            const auto previousWindow = sharedPreviousWindow->decompress();
+            auto previousWindow = sharedPreviousWindow->decompress();
 
             const auto windowOffset = chunkData->encodedOffsetInBits + chunkData->encodedSizeInBits;
             if ( !m_windowMap->get( windowOffset ) ) {
@@ -476,9 +493,11 @@ private:
 
             m_markersBeingReplaced.emplace(
                 chunkData->encodedOffsetInBits,
-                this->submitTaskWithHighPriority( [this, chunkData, sharedPreviousWindow] () {
-                    replaceMarkers( chunkData, sharedPreviousWindow->decompress() );
-                } )
+                this->submitTaskWithHighPriority(
+                    [this, chunkData, window = std::move( previousWindow ),
+                     compressionType = m_windowMap->compressionType()] () {
+                        replaceMarkers( chunkData, window, compressionType );
+                    } )
             );
         }
     }
@@ -488,7 +507,8 @@ private:
      */
     void
     replaceMarkers( const std::shared_ptr<ChunkData>& chunkData,
-                    const WindowView                  previousWindow )
+                    const WindowView                  previousWindow,
+                    const CompressionType             windowCompressionType )
     {
         /* This is expensive! It adds 20-30% overhead for the FASTQ file! Therefore disable it.
          * The result for this statistics for:
@@ -527,6 +547,13 @@ private:
             }
         }
         chunkData->applyWindow( previousWindow );
+
+        size_t decodedOffsetInBlock{ 0 };
+        for ( auto& subchunk : chunkData->subchunks ) {
+            decodedOffsetInBlock += subchunk.decodedSize;
+            subchunk.window = std::make_shared<WindowMap::Window>(
+                chunkData->getWindowAt( previousWindow, decodedOffsetInBlock ), windowCompressionType );
+        }
     }
 
     /**

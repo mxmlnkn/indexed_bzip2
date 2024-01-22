@@ -8,8 +8,10 @@
 #include <type_traits>
 #include <vector>
 
+#include <CompressedVector.hpp>
 #include <crc32.hpp>
 #include <DecodedData.hpp>
+#include <FasterVector.hpp>
 #include <gzip.hpp>
 
 
@@ -88,13 +90,15 @@ struct ChunkData :
         size_t encodedOffset{ 0 };
         size_t encodedSize{ 0 };
         size_t decodedSize{ 0 };
+        std::shared_ptr<CompressedVector<FasterVector<uint8_t> > > window{};
 
         [[nodiscard]] bool
         operator==( const Subchunk& other ) const
         {
             return ( encodedOffset == other.encodedOffset )
                    && ( encodedSize == other.encodedSize )
-                   && ( decodedSize == other.decodedSize );
+                   && ( decodedSize == other.decodedSize )
+                   && ( window == other.window );
         }
     };
 
@@ -326,7 +330,7 @@ public:
     [[nodiscard]] bool
     hasBeenPostProcessed() const
     {
-        return !subchunks.empty() && !containsMarkers();
+        return !subchunks.empty() && subchunks.front().window && !containsMarkers();
     }
 
 protected:
