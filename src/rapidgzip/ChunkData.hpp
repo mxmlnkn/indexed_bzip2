@@ -353,8 +353,12 @@ public:
      * @ref encodedSizeInBits. */
     size_t encodedEndOffsetInBits{ std::numeric_limits<size_t>::max() };
 
-    /* Decoded offsets are relative to the decoded offset of this ChunkData because that might not be known
-     * during first-pass decompression. */
+    /**
+     * Decoded offsets are relative to the decoded offset of this ChunkData because that might not be known
+     * during first-pass decompression.
+     * @todo Does this even work for maxEncodedOffsetInBits != encodedOffsetInBits !?
+     *       Well, will replace it anyway, so yeah ... But add tests anyway and check them before!
+     */
     std::vector<BlockBoundary> blockBoundaries;
     std::vector<Footer> footers;
     /* There will be ( footers.size() + 1 ) CRC32 calculators. */

@@ -678,6 +678,10 @@ private:
             sharedWindow = std::make_shared<WindowMap::Window>();
         }
 
+        /** @todo implement populating of subchunks and determining of the sparseness for each window
+                  inside ChunkData::append and finalize to avoid large seeks. Note that the full windows cannot
+                  be compressed here because they might contain markers. Basically, only store the back-references
+                  for the sparseness + compression, which will be done during marker replacement. */
         return decodeBlock(
             m_bitReader, blockOffset,
             /* untilOffset */
