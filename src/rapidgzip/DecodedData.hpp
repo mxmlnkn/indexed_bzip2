@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <FasterVector.hpp>
+#include <VectorPool.hpp>
 #include <VectorView.hpp>
 
 #include "DecodedDataView.hpp"
@@ -20,8 +21,19 @@
 
 namespace rapidgzip::deflate
 {
-using MarkerVector = FasterVector<uint16_t>;
+using RawMarkerVector = FasterVector<uint16_t>;
+using MarkerVector = VectorPool<RawMarkerVector>::WrappedContainer;
 using DecodedVector = FasterVector<uint8_t>;
+
+static constexpr auto ALLOCATION_CHUNK_SIZE = 128_Ki;
+static constexpr auto ALLOCATION_ELEMENT_COUNT = ALLOCATION_CHUNK_SIZE / sizeof( RawMarkerVector::value_type );
+
+/**
+ * @todo make it a member of GzipChunkFetcher so that it is cleared after the decompressor is destructed.
+ * @todo Have one pool per thread to reduce lock contention issues.
+ * @todo periodically free unused chunks so that we don't stay at Peak RSS after encountering it once?
+ */
+static const auto VECTOR_POOL = VectorPool<RawMarkerVector>::create( ALLOCATION_ELEMENT_COUNT );
 
 
 struct DecodedData
@@ -236,28 +248,27 @@ private:
 inline void
 DecodedData::append( DecodedDataView const& buffers )
 {
-    static constexpr auto ALLOCATION_CHUNK_SIZE = 128_Ki;
-
     const auto& appendToEquallySizedChunks =
         [] ( auto&       targetChunks,
              const auto& buffer )
         {
-            constexpr auto ALLOCATION_ELEMENT_COUNT = ALLOCATION_CHUNK_SIZE / sizeof( targetChunks[0][0] );
-
-            if ( targetChunks.empty() ) {
-                targetChunks.emplace_back().reserve( ALLOCATION_ELEMENT_COUNT );
-            }
-
             for ( size_t nCopied = 0; nCopied < buffer.size(); ) {
-                auto& copyTarget = targetChunks.back();
-                const auto nFreeElements = copyTarget.capacity() - copyTarget.size();
+                const auto nFreeElements = targetChunks.empty()
+                                           ? 0
+                                           : targetChunks.back().capacity() - targetChunks.back().size();
                 if ( nFreeElements == 0 ) {
-                    targetChunks.emplace_back().reserve( ALLOCATION_ELEMENT_COUNT );
+                    targetChunks.emplace_back( VECTOR_POOL->allocate() );
+                    if ( targetChunks.back().capacity() == 0 ) {
+                        std::cerr << "[Info] Capacity of newly created vector is 0! This might happen if they "
+                                     "are unintentionally copied\n";
+                        targetChunks.back().reserve( ALLOCATION_ELEMENT_COUNT );
+                    }
                     continue;
                 }
 
                 const auto nToCopy = std::min( nFreeElements, buffer.size() - nCopied );
-                copyTarget.insert( copyTarget.end(), buffer.begin() + nCopied, buffer.begin() + nCopied + nToCopy );
+                targetChunks.back().insert( targetChunks.back().end(),
+                                            buffer.begin() + nCopied, buffer.begin() + nCopied + nToCopy );
                 nCopied += nToCopy;
             }
         };

@@ -23,6 +23,7 @@ target_sources(core INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/StreamedResults.hpp
     ${CMAKE_CURRENT_LIST_DIR}/TestHelpers.hpp
     ${CMAKE_CURRENT_LIST_DIR}/ThreadPool.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/VectorPool.hpp
     ${CMAKE_CURRENT_LIST_DIR}/VectorView.hpp
 )
 target_link_libraries(core INTERFACE Threads::Threads filereader)
