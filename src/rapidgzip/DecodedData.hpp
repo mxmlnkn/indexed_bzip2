@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <FasterVector.hpp>
+#include <VectorPool.hpp>
 #include <VectorView.hpp>
 
 #include "DecodedDataView.hpp"
@@ -20,8 +21,13 @@
 
 namespace rapidgzip::deflate
 {
-using MarkerVector = FasterVector<uint16_t>;
+using RawMarkerVector = FasterVector<uint16_t>;
+using MarkerVector = VectorPool<RawMarkerVector>::WrappedContainer;
 using DecodedVector = FasterVector<uint8_t>;
+
+static constexpr auto ALLOCATION_CHUNK_SIZE = 128_Ki;
+static constexpr auto ALLOCATION_ELEMENT_COUNT = ALLOCATION_CHUNK_SIZE / sizeof( RawMarkerVector::value_type );
+static const auto VECTOR_POOL = VectorPool<RawMarkerVector>::create( ALLOCATION_ELEMENT_COUNT );
 
 
 struct DecodedData
@@ -240,23 +246,19 @@ private:
 inline void
 DecodedData::append( DecodedDataView const& buffers )
 {
-    static constexpr auto ALLOCATION_CHUNK_SIZE = 128_Ki;
-
     const auto& appendToEquallySizedChunks =
         [] ( auto&       targetChunks,
              const auto& buffer )
         {
-            constexpr auto ALLOCATION_ELEMENT_COUNT = ALLOCATION_CHUNK_SIZE / sizeof( targetChunks[0][0] );
-
             if ( targetChunks.empty() ) {
-                targetChunks.emplace_back().reserve( ALLOCATION_ELEMENT_COUNT );
+                targetChunks.emplace_back( VECTOR_POOL->allocate() );
             }
 
             for ( size_t nCopied = 0; nCopied < buffer.size(); ) {
                 auto& copyTarget = targetChunks.back();
                 const auto nFreeElements = copyTarget.capacity() - copyTarget.size();
                 if ( nFreeElements == 0 ) {
-                    targetChunks.emplace_back().reserve( ALLOCATION_ELEMENT_COUNT );
+                    targetChunks.emplace_back( VECTOR_POOL->allocate() );
                     continue;
                 }
 

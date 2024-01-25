@@ -132,6 +132,7 @@ public:
     {
         m_cancelThreads = true;
         this->stopThreadPool();
+        const auto& poolStatistics = deflate::VECTOR_POOL->statistics();
 
         if ( BaseType::m_showProfileOnDestruction ) {
             std::stringstream out;
@@ -144,6 +145,8 @@ public:
             out << "    Time spent decoding with ISA-L           : " << m_statistics.decodeDurationIsal << " s\n";
             out << "    Time spent allocating and copying        : " << m_statistics.appendDuration << " s\n";
             out << "    Time spent applying the last window      : " << m_statistics.applyWindowDuration << " s\n";
+            out << "    Number of allocated 128 KiB buffers      : " << poolStatistics.allocationCount << "\n";
+            out << "    Number of reused 128 KiB buffers         : " << poolStatistics.reuseCount << "\n";
             out << "    Time spent computing the checksum        : " << m_statistics.computeChecksumDuration << " s\n";
             out << "    Replaced marker buffers                  : " << formatBytes( m_statistics.markerCount ) << "\n";
             if constexpr ( ENABLE_REAL_MARKER_COUNT ) {
