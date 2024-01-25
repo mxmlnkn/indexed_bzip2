@@ -8,10 +8,8 @@
 #include <type_traits>
 #include <vector>
 
-#include <CompressedVector.hpp>
 #include <crc32.hpp>
 #include <DecodedData.hpp>
-#include <FasterVector.hpp>
 #include <gzip.hpp>
 
 
@@ -90,15 +88,13 @@ struct ChunkData :
         size_t encodedOffset{ 0 };
         size_t encodedSize{ 0 };
         size_t decodedSize{ 0 };
-        std::shared_ptr<CompressedVector<FasterVector<uint8_t> > > window{};
 
         [[nodiscard]] bool
         operator==( const Subchunk& other ) const
         {
             return ( encodedOffset == other.encodedOffset )
                    && ( encodedSize == other.encodedSize )
-                   && ( decodedSize == other.decodedSize )
-                   && ( window == other.window );
+                   && ( decodedSize == other.decodedSize );
         }
     };
 
@@ -330,7 +326,7 @@ public:
     [[nodiscard]] bool
     hasBeenPostProcessed() const
     {
-        return !subchunks.empty() && subchunks.front().window && !containsMarkers();
+        return !subchunks.empty() && !containsMarkers();
     }
 
 protected:
@@ -353,12 +349,8 @@ public:
      * @ref encodedSizeInBits. */
     size_t encodedEndOffsetInBits{ std::numeric_limits<size_t>::max() };
 
-    /**
-     * Decoded offsets are relative to the decoded offset of this ChunkData because that might not be known
-     * during first-pass decompression.
-     * @todo Does this even work for maxEncodedOffsetInBits != encodedOffsetInBits !?
-     *       Well, will replace it anyway, so yeah ... But add tests anyway and check them before!
-     */
+    /* Decoded offsets are relative to the decoded offset of this ChunkData because that might not be known
+     * during first-pass decompression. */
     std::vector<BlockBoundary> blockBoundaries;
     std::vector<Footer> footers;
     /* There will be ( footers.size() + 1 ) CRC32 calculators. */

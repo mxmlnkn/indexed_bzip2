@@ -115,7 +115,7 @@ operator<<( std::ostream&                                    out,
             const std::vector<rapidgzip::ChunkData::Subchunk>& chunks )
 {
     out << "{";
-    for ( const auto& chunk : chunks ) {
+    for ( const auto chunk : chunks ) {
         out << " (" << chunk.encodedOffset << ", " << chunk.encodedSize << ", " << chunk.decodedSize << ")";
     }
     out << " }";
@@ -227,7 +227,7 @@ testIsalBug()
         bitReader,
         blockOffset,
         untilOffset,
-        /* window */ std::make_shared<WindowMap::Window>( window, CompressionType::GZIP ),
+        /* window */ std::make_shared<WindowMap::Window>( window ),
         /* decodedSize */ 4171816,
         cancel,
         configuredChunkData,
