@@ -107,37 +107,6 @@ class VectorPool :
     public std::enable_shared_from_this<VectorPool<Container> >
 {
 public:
-    /**
-     * These containers are only created via VectorPool::create anyway, so we don't have to worry
-     * about having to redeclare and redirect to all possible std::vector constructors when inheriting.
-     */
-    /*class WrappedContainer :
-        public Container
-    {
-    public:
-        WrappedContainer() = default;
-
-        //explicit
-        //WrappedContainer( std::weak_ptr<VectorPool> pool ) :
-        //    m_pool( std::move( pool ) )
-        //{}
-        //
-        //WrappedContainer( Container&&               container,
-        //                  std::weak_ptr<VectorPool> pool ) :
-        //    Container( std::move( container ) ),
-        //    m_pool( std::move( pool ) )
-        //{}
-
-        ~WrappedContainer()
-        {
-            //if ( const auto sharedPool = m_pool.lock() ) {
-                //sharedPool->reuse( std::move( static_cast<Container&>( *this ) ) );
-            //}
-        }
-
-    private:
-        //const std::weak_ptr<VectorPool> m_pool;
-    };*/
     using WrappedContainer = Container;
 
     struct Statistics
@@ -157,7 +126,11 @@ public:
     allocate()
     {
         WrappedContainer result; //( this->weak_from_this() );
+        std::stringstream message;
+        message << "Reserve capacity:" << m_vectorCapacity << "\n";
+        std::cerr << std::move( message ).str();
         result.reserve( m_vectorCapacity );
+        std::cerr << "Reserved\n";
         return result;
     }
 
@@ -177,7 +150,7 @@ private:
     const size_t m_vectorCapacity;
     Statistics m_statistics;
 
-    //std::mutex m_mutex;
-    //std::vector<Container> m_containers;
+    std::mutex m_mutex;
+    std::vector<Container> m_containers;
 };
 #endif
