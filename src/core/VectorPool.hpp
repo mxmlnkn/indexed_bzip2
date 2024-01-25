@@ -107,7 +107,27 @@ class VectorPool :
     public std::enable_shared_from_this<VectorPool<Container> >
 {
 public:
-    using WrappedContainer = Container;
+    class WrappedContainer :
+        private Container
+    {
+    public:
+        WrappedContainer() = default;
+        /* This destructor definition leads to a memory leak resulting in an OOM kill after 70 GB! */
+        ~WrappedContainer() = default;
+
+        using Container::data;
+        using Container::begin;
+        using Container::end;
+        using Container::rbegin;
+        using Container::rend;
+        using Container::reserve;
+        using Container::capacity;
+        using Container::size;
+        using Container::resize;
+        using Container::shrink_to_fit;
+        using Container::insert;
+        using Container::operator[];
+    };
 
     struct Statistics
     {
@@ -126,11 +146,7 @@ public:
     allocate()
     {
         WrappedContainer result; //( this->weak_from_this() );
-        std::stringstream message;
-        message << "Reserve capacity:" << m_vectorCapacity << "\n";
-        std::cerr << std::move( message ).str();
         result.reserve( m_vectorCapacity );
-        std::cerr << "Reserved\n";
         return result;
     }
 
