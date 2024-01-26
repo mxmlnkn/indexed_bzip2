@@ -116,6 +116,13 @@ public:
         WrappedContainer() = default;
         /* This destructor definition leads to a memory leak resulting in an OOM kill after 70 GB! */
         ~WrappedContainer() {}
+        WrappedContainer( WrappedContainer&& other ) :
+            m_container( std::move( other.m_container ) )
+        {}
+
+        WrappedContainer( const WrappedContainer& other ) :
+            m_container( other.m_container )
+        {}
 
         [[nodiscard]] auto data() { return m_container.data(); };
         [[nodiscard]] auto data() const { return m_container.data(); };
