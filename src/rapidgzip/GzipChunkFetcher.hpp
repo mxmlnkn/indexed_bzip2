@@ -632,6 +632,8 @@ private:
         return chunkData;
     }
 
+    /** @todo return std::shared_ptr<ChunkData> to avoid copies in all cases! This also avoids the weird-looking
+     * return *std::move() optional stuff! */
     [[nodiscard]] ChunkData
     decodeBlock( size_t blockOffset,
                  size_t nextBlockOffset ) const override
@@ -640,6 +642,7 @@ private:
          * of the correct ordering between BlockMap accesses and modifications (the BlockMap is still thread-safe). */
         const auto blockInfo = m_blockMap->getEncodedOffset( blockOffset );
 
+        /** @todo split this into configuration and actual result to avoid data copies even if empty? */
         ChunkData configuredChunkData;
         configuredChunkData.setCRC32Enabled( m_crc32Enabled );
         configuredChunkData.fileType = m_blockFinder->fileType();
