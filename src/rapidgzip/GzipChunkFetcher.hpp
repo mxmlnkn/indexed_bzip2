@@ -666,7 +666,7 @@ private:
             std::move( sharedWindow ),
             /* decodedSize */ blockInfo ? blockInfo->decodedSizeInBytes : std::optional<size_t>{},
             m_cancelThreads,
-            configuredChunkData,
+            std::move( configuredChunkData ),
             m_maxDecompressedChunkSize,
             /* untilOffsetIsExact */ m_isBgzfFile || blockInfo );
     }
@@ -686,7 +686,7 @@ public:
                  SharedWindow              const initialWindow,
                  std::optional<size_t>     const decodedSize,
                  std::atomic<bool>        const& cancelThreads,
-                 ChunkData                const& configuredChunkData,
+                 ChunkData                    && configuredChunkData,
                  size_t                    const maxDecompressedChunkSize = std::numeric_limits<size_t>::max(),
                  bool                      const untilOffsetIsExact = false )
     {
@@ -700,7 +700,7 @@ public:
             const auto fileSize = originalBitReader.size();
             const auto& window = *initialWindow;
 
-            auto result = configuredChunkData;
+            auto result = std::move( configuredChunkData );
             result.encodedOffsetInBits = blockOffset;
             result = decodeBlockWithInflateWrapper<InflateWrapper>(
                 originalBitReader,
@@ -731,7 +731,7 @@ public:
             bitReader.seek( blockOffset );
             const auto& window = *initialWindow;
             return decodeBlockWithRapidgzip( &bitReader, untilOffset, window, maxDecompressedChunkSize,
-                                             ChunkData( configuredChunkData ) );
+                                             std::move( configuredChunkData ) );
         }
 
         const auto tryToDecode =
@@ -864,7 +864,7 @@ public:
                     result->statistics.blockFinderDuration = duration( tBlockFinderStart, tBlockFinderStop );
                     result->statistics.decodeDuration = duration( tBlockFinderStop );
                     result->statistics.falsePositiveCount = falsePositiveCount;
-                    return *std::move( result );
+                    return std::move( *result );
                 }
 
                 falsePositiveCount++;
