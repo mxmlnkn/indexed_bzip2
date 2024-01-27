@@ -27,9 +27,6 @@
 #include "deflate.hpp"
 #include "gzip.hpp"
 #include "GzipBlockFinder.hpp"
-#ifdef WITH_ISAL
-    #include "isal.hpp"
-#endif
 #include "WindowMap.hpp"
 #include "zlib.hpp"
 
@@ -132,7 +129,6 @@ public:
     {
         m_cancelThreads = true;
         this->stopThreadPool();
-        const auto& poolStatistics = deflate::VECTOR_POOL->statistics();
 
         if ( BaseType::m_showProfileOnDestruction ) {
             std::stringstream out;
@@ -145,8 +141,6 @@ public:
             out << "    Time spent decoding with ISA-L           : " << m_statistics.decodeDurationIsal << " s\n";
             out << "    Time spent allocating and copying        : " << m_statistics.appendDuration << " s\n";
             out << "    Time spent applying the last window      : " << m_statistics.applyWindowDuration << " s\n";
-            out << "    Number of allocated 128 KiB buffers      : " << poolStatistics.allocationCount << "\n";
-            out << "    Number of reused 128 KiB buffers         : " << poolStatistics.reuseCount << "\n";
             out << "    Time spent computing the checksum        : " << m_statistics.computeChecksumDuration << " s\n";
             out << "    Replaced marker buffers                  : " << formatBytes( m_statistics.markerCount ) << "\n";
             if constexpr ( ENABLE_REAL_MARKER_COUNT ) {
@@ -691,11 +685,7 @@ public:
                  bool                      const untilOffsetIsExact = false )
     {
         if ( initialWindow && untilOffsetIsExact ) {
-        #ifdef WITH_ISAL
-            using InflateWrapper = IsalInflateWrapper;
-        #else
             using InflateWrapper = ZlibInflateWrapper;
-        #endif
 
             const auto fileSize = originalBitReader.size();
             const auto& window = *initialWindow;
@@ -1029,170 +1019,6 @@ public:
         return std::move( result );
     }
 
-
-#ifdef WITH_ISAL
-    /**
-     * This is called from @ref decodeBlockWithRapidgzip in case the window has been fully resolved so that
-     * normal decompression instead of two-staged one becomes possible.
-     *
-     * @param untilOffset In contrast to @ref decodeBlockWithInflateWrapper, this may be an inexact guess
-     *                    from which another thread starts decoding!
-     * @note This code is copy-pasted from decodeBlockWithInflateWrapper and adjusted to use the stopping
-     *       points and deflate block properties as stop criterion.
-     */
-    [[nodiscard]] static ChunkData
-    finishDecodeBlockWithIsal( BitReader* const bitReader,
-                               size_t     const untilOffset,
-                               WindowView const initialWindow,
-                               size_t     const maxDecompressedChunkSize,
-                               ChunkData&&      result )
-    {
-        if ( bitReader == nullptr ) {
-            throw std::invalid_argument( "BitReader may not be nullptr!" );
-        }
-
-        const auto tStart = now();
-        auto nextBlockOffset = bitReader->tell();
-        bool stoppingPointReached{ false };
-        auto alreadyDecoded = result.size();
-
-        if ( ( alreadyDecoded > 0 ) && !bitReader->eof() ) {
-            result.appendDeflateBlockBoundary( nextBlockOffset, alreadyDecoded );
-        }
-
-        IsalInflateWrapper inflateWrapper{ BitReader( *bitReader ) };
-        inflateWrapper.setFileType( result.fileType );
-        inflateWrapper.setWindow( initialWindow );
-        inflateWrapper.setStoppingPoints( static_cast<StoppingPoint>( StoppingPoint::END_OF_BLOCK |
-                                                                      StoppingPoint::END_OF_BLOCK_HEADER |
-                                                                      StoppingPoint::END_OF_STREAM_HEADER ) );
-
-        const auto appendFooter =
-            [&] ( size_t encodedOffset,
-                  size_t decodedOffset,
-                  const IsalInflateWrapper::Footer& footer )
-            {
-                switch ( result.fileType )
-                {
-                case FileType::BGZF:
-                case FileType::GZIP:
-                    result.appendFooter( encodedOffset, decodedOffset, footer.gzipFooter );
-                    break;
-
-                case FileType::ZLIB:
-                    result.appendFooter( encodedOffset, decodedOffset, footer.zlibFooter );
-                    break;
-
-                case FileType::NONE:
-                case FileType::DEFLATE:
-                    result.appendFooter( encodedOffset, decodedOffset );
-                    break;
-                }
-            };
-
-        constexpr size_t ALLOCATION_CHUNK_SIZE = 128_Ki;
-        while( !stoppingPointReached ) {
-            deflate::DecodedVector subchunk( ALLOCATION_CHUNK_SIZE );
-            std::optional<IsalInflateWrapper::Footer> footer;
-
-            /* In order for CRC32 verification to work, we have to append at most one gzip stream per subchunk
-             * because the CRC32 calculator is swapped inside ChunkData::append. */
-            size_t nBytesRead = 0;
-            size_t nBytesReadPerCall{ 0 };
-            while ( ( nBytesRead < subchunk.size() ) && !footer && !stoppingPointReached ) {
-                std::tie( nBytesReadPerCall, footer ) = inflateWrapper.readStream( subchunk.data() + nBytesRead,
-                                                                                   subchunk.size() - nBytesRead );
-                nBytesRead += nBytesReadPerCall;
-
-                /* We cannot stop decoding after a final block because the following decoder does not
-                 * expect to start a gzip footer. Put another way, we are interested in START_OF_BLOCK
-                 * not END_OF_BLOCK and therefore we have to infer one from the other. */
-                bool isBlockStart{ false };
-
-                switch ( inflateWrapper.stoppedAt() )
-                {
-                case StoppingPoint::END_OF_STREAM_HEADER:
-                    isBlockStart = true;
-                    break;
-
-                case StoppingPoint::END_OF_BLOCK:
-                    isBlockStart = !inflateWrapper.isFinalBlock();
-                    break;
-
-                case StoppingPoint::END_OF_BLOCK_HEADER:
-                    if ( ( ( nextBlockOffset >= untilOffset )
-                           && !inflateWrapper.isFinalBlock()
-                           && ( inflateWrapper.compressionType() != deflate::CompressionType::FIXED_HUFFMAN ) )
-                         || ( nextBlockOffset == untilOffset ) ) {
-                        stoppingPointReached = true;
-                    }
-                    break;
-
-                case StoppingPoint::NONE:
-                    if ( ( nBytesReadPerCall == 0 ) && !footer ) {
-                        stoppingPointReached = true;
-                    }
-                    break;
-
-                default:
-                    throw std::logic_error( "Got stopping point of a type that was not requested!" );
-                }
-
-                if ( isBlockStart ) {
-                    nextBlockOffset = inflateWrapper.tellCompressed();
-
-                    /* Do not push back the first boundary because it is redundant as it should contain the same encoded
-                     * offset as @ref result and it also would have the same problem that the real offset is ambiguous
-                     * for non-compressed blocks. */
-                    if ( alreadyDecoded + nBytesRead > 0 ) {
-                        result.appendDeflateBlockBoundary( nextBlockOffset, alreadyDecoded + nBytesRead );
-                    }
-
-                    if ( alreadyDecoded >= maxDecompressedChunkSize ) {
-                        stoppingPointReached = true;
-                        result.stoppedPreemptively = true;
-                        break;
-                    }
-                }
-            }
-
-            alreadyDecoded += nBytesRead;
-
-            subchunk.resize( nBytesRead );
-            subchunk.shrink_to_fit();
-            result.append( std::move( subchunk ) );
-            if ( footer ) {
-                nextBlockOffset = inflateWrapper.tellCompressed();
-                appendFooter( footer->footerEndEncodedOffset, alreadyDecoded, *footer );
-            }
-
-            if ( ( inflateWrapper.stoppedAt() == StoppingPoint::NONE )
-                 && ( nBytesReadPerCall == 0 ) && !footer ) {
-                break;
-            }
-        }
-
-        uint8_t dummy{ 0 };
-        const auto [nBytesReadPerCall, footer] = inflateWrapper.readStream( &dummy, 1 );
-        if ( ( inflateWrapper.stoppedAt() == StoppingPoint::NONE ) && ( nBytesReadPerCall == 0 ) && footer ) {
-            nextBlockOffset = inflateWrapper.tellCompressed();
-            appendFooter( footer->footerEndEncodedOffset, alreadyDecoded, *footer );
-        }
-
-        result.finalize( nextBlockOffset );
-        result.statistics.decodeDurationIsal = duration( tStart );
-        /**
-         * Without the std::move, performance is halved! It seems like copy elision on return does not work
-         * with function arguments! @see https://en.cppreference.com/w/cpp/language/copy_elision
-         * > In a return statement, when the operand is the name of a non-volatile object with automatic
-         * > storage duration, **which isn't a function parameter** [...]
-         * And that is only the non-mandatory copy elision, which isn't even guaranteed in C++17!
-         */
-        return std::move( result );
-    }
-#endif  // ifdef WITH_ISAL
-
-
     [[nodiscard]] static ChunkData
     decodeBlockWithRapidgzip( BitReader*                const bitReader,
                               size_t                    const untilOffset,
@@ -1205,13 +1031,6 @@ public:
         }
 
         result.encodedOffsetInBits = bitReader->tell();
-
-    #ifdef WITH_ISAL
-        if ( initialWindow ) {
-            return finishDecodeBlockWithIsal( bitReader, untilOffset, *initialWindow, maxDecompressedChunkSize,
-                                              std::move( result ) );
-        }
-    #endif
 
         /* If true, then read the gzip header. We cannot simply check the gzipHeader optional because we might
          * start reading in the middle of a gzip stream and will not meet the gzip header for a while or never. */
@@ -1230,9 +1049,6 @@ public:
          * something very similar because GzipReader only works with fully decodable streams but we
          * might want to return buffer with placeholders in case we don't know the initial window, yet! */
         size_t nextBlockOffset{ 0 };
-    #ifdef WITH_ISAL
-        size_t cleanDataCount{ 0 };
-    #endif
         while ( true )
         {
             if ( isAtStreamEnd ) {
@@ -1265,11 +1081,6 @@ public:
                     throw std::domain_error( std::move( message ).str() );
                 }
 
-            #ifdef WITH_ISAL
-                return finishDecodeBlockWithIsal( bitReader, untilOffset, /* initialWindow */ {},
-                                                  maxDecompressedChunkSize, std::move( result ) );
-            #endif
-
                 didReadHeader = true;
                 block.emplace();
                 block->setInitialWindow();
@@ -1283,15 +1094,6 @@ public:
                 result.stoppedPreemptively = true;
                 break;
             }
-
-        #ifdef WITH_ISAL
-            if ( cleanDataCount >= deflate::MAX_WINDOW_SIZE ) {
-                const deflate::DecodedVector window = result.getLastWindow( {} );
-                return finishDecodeBlockWithIsal( bitReader, untilOffset,
-                                                  VectorView<uint8_t>( window.data(), window.size() ),
-                                                  maxDecompressedChunkSize, std::move( result ) );
-            }
-        #endif
 
             if ( auto error = block->readHeader( *bitReader ); error != Error::NONE ) {
                 /* Encountering EOF while reading the (first bit for the) deflate block header is only
@@ -1340,10 +1142,6 @@ public:
                             << " because of: " << toString( error );
                     throw std::domain_error( std::move( message ).str() );
                 }
-
-            #ifdef WITH_ISAL
-                cleanDataCount += bufferViews.dataSize();
-            #endif
 
                 result.append( bufferViews );
                 blockBytesRead += bufferViews.size();

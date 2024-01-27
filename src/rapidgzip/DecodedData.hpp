@@ -21,14 +21,55 @@
 
 namespace rapidgzip::deflate
 {
+static constexpr auto ALLOCATION_CHUNK_SIZE = 128_Ki;
+static constexpr auto ALLOCATION_ELEMENT_COUNT = ALLOCATION_CHUNK_SIZE / sizeof( uint16_t );
+
+
+template<typename Container>
+class VectorPool
+{
+public:
+    class WrappedContainer
+    {
+    public:
+        using const_iterator = typename Container::const_iterator;
+
+    public:
+        WrappedContainer() = default;
+        /* This destructor definition leads to a memory leak resulting in an OOM kill after 70 GB! */
+        ~WrappedContainer() {}
+
+        [[nodiscard]] auto data() { return m_container.data(); };
+        [[nodiscard]] auto data() const { return m_container.data(); };
+        [[nodiscard]] auto begin() const { return m_container.begin(); };
+        [[nodiscard]] auto end() const { return m_container.end(); };
+        [[nodiscard]] auto rbegin() const { return m_container.rbegin(); };
+        [[nodiscard]] auto rend() const { return m_container.rend(); };
+        [[nodiscard]] auto capacity() const { return m_container.capacity(); };
+        [[nodiscard]] auto size() const { return m_container.size(); };
+        void reserve( size_t newCapacity ) { return m_container.reserve( newCapacity ); };
+        void resize( size_t newSize ) { return m_container.resize( newSize ); };
+        void shrink_to_fit() { return m_container.shrink_to_fit(); };
+        template<class InputIt>
+        auto insert( const_iterator pos, InputIt first, InputIt last ) { return m_container.insert( pos, first, last ); };
+        [[nodiscard]] auto operator[]( size_t index ) const { return m_container.operator[]( index ); };
+    private:
+        Container m_container;
+    };
+
+    [[nodiscard]] static WrappedContainer
+    allocate()
+    {
+        WrappedContainer result; //( this->weak_from_this() );
+        result.reserve( ALLOCATION_ELEMENT_COUNT );
+        return result;
+    }
+};
+
+
 using RawMarkerVector = FasterVector<uint16_t>;
 using MarkerVector = VectorPool<RawMarkerVector>::WrappedContainer;
 using DecodedVector = FasterVector<uint8_t>;
-
-static constexpr auto ALLOCATION_CHUNK_SIZE = 128_Ki;
-static constexpr auto ALLOCATION_ELEMENT_COUNT = ALLOCATION_CHUNK_SIZE / sizeof( RawMarkerVector::value_type );
-static const auto VECTOR_POOL = VectorPool<RawMarkerVector>::create( ALLOCATION_ELEMENT_COUNT );
-
 
 struct DecodedData
 {
@@ -251,14 +292,14 @@ DecodedData::append( DecodedDataView const& buffers )
              const auto& buffer )
         {
             if ( targetChunks.empty() ) {
-                targetChunks.emplace_back( VECTOR_POOL->allocate() );
+                targetChunks.emplace_back( VectorPool<RawMarkerVector>::allocate() );
             }
 
             for ( size_t nCopied = 0; nCopied < buffer.size(); ) {
                 auto& copyTarget = targetChunks.back();
                 const auto nFreeElements = copyTarget.capacity() - copyTarget.size();
                 if ( nFreeElements == 0 ) {
-                    targetChunks.emplace_back( VECTOR_POOL->allocate() );
+                    targetChunks.emplace_back( VectorPool<RawMarkerVector>::allocate() );
                     continue;
                 }
 
