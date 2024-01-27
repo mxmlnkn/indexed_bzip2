@@ -6,7 +6,6 @@
 #include <limits>
 #include <stdexcept>
 
-#include <definitions.hpp>              // MAX_WINDOW_SIZE
 #include <VectorView.hpp>
 
 
