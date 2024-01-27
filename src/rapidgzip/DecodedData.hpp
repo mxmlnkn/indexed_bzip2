@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <numeric>
 #include <type_traits>
 #include <utility>
 #include <vector>
