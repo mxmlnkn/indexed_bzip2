@@ -21,6 +21,9 @@
 #include <GzipReader.hpp>
 #include <Prefetcher.hpp>
 #include <TestHelpers.hpp>
+#ifdef WITH_ISAL
+    #include <isal.hpp>
+#endif
 
 
 using namespace rapidgzip;
@@ -71,7 +74,7 @@ testAutomaticMarkerResolution( const std::filesystem::path& filePath,
             /* window */ {},
             /* decodedSize */ std::nullopt,
             cancel,
-            configuredChunkData );
+            std::move( configuredChunkData ) );
 
         const auto& dataWithMarkers = result.getDataWithMarkers();
         std::vector<size_t> markerBlockSizesFound( dataWithMarkers.size() );
@@ -230,7 +233,7 @@ testIsalBug()
         /* window */ std::make_shared<WindowMap::Window>( window ),
         /* decodedSize */ 4171816,
         cancel,
-        configuredChunkData,
+        std::move( configuredChunkData ),
         /* maxDecompressedChunkSize */ 4_Mi,
         /* isBgzfFile */ true );
 }
@@ -375,7 +378,7 @@ decodeWithDecodeBlock( UniqueFileReader&& fileReader )
         /* window */ {},
         /* decodedSize */ std::nullopt,
         cancel,
-        configuredChunkData );
+        std::move( configuredChunkData ) );
 }
 
 
