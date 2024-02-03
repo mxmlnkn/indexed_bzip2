@@ -1,10 +1,36 @@
 
+# Version 0.13.0 built on 2024-02-04
+
+## Fixes
+
+ - Return only an appropriate exit code instead of showing a Python stacktrace in case of a broken pipe signal.
+
+
 # Version 0.12.1 built on 2024-01-08
+
+## Added
+
+ - Use ISA-L CRC32 computation, which uses PCLMULQDQ if available
+ - Improve profiling output on `--verbose`.
+
+## Performance
+
+ - Compress windows for chunks with large compression ratios in memory to reduce the memory footprint.
+   This reduces the memory usage for working with `wikidata-20220103-all.json.gz`
+   from 20 GB down to 12 GB and can have even larger effects for larger files.
+   The compression ratio threshold and the compression being done in parallel keeps the overhead
+   for this memory optimization to a minimum.
+ - Avoid temporary allocations for internal `SharedFileReader::getLock` calls.
 
 ## Fixes
 
  - Fix segmentation fault from rpmalloc because `rpmalloc_thread_initialize` was not called because
    the `static thread_local` global variable was not initialized at all because it was never used.
+
+## API
+
+ - Change template parameter `ENABLE_STATISTICS` into a member.
+ - Move `ChunkData` statistics into a subclass.
 
 
 # Version 0.12.0 built on 2024-01-07
