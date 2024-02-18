@@ -30,7 +30,7 @@
 #include <huffman/HuffmanCodingReversedBitsCached.hpp>
 //#include <huffman/HuffmanCodingReversedCodesPerLength.hpp>
 
-//#define WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER
+#define WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER
 
 #ifdef WITH_ISAL
     //#include <huffman/HuffmanCodingDistanceISAL.hpp>
@@ -514,22 +514,6 @@ public:
     using Backreference = std::pair<uint16_t, uint16_t>;
 
 public:
-    ~Block()
-    {
-    #ifdef WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER
-        const auto hits = m_literalHC.statistics().cacheHits;
-        const auto misses = m_literalHC.statistics().cacheMisses;
-        const auto distanceMisses = m_literalHC.statistics().cacheMissesForDistances;
-        const auto total = static_cast<double>( hits + misses + distanceMisses );
-        std::cerr << "Literal Huffman Coding: Cache Hits: " << hits
-                  << ", Distance Cache Misses: " << m_literalHC.statistics().cacheMissesForDistances
-                  << ", Full Cache Misses: " << misses << " -> Full Hit Rate: "
-                  << static_cast<double>( hits ) / total * 100
-                  << " % -> Partial Hit Rate (Even if Distance Missing): "
-                  << static_cast<double>( hits + distanceMisses ) / total * 100 << " %\n";
-    #endif
-    }
-
     [[nodiscard]] bool
     eob() const noexcept
     {
@@ -1022,8 +1006,8 @@ Block<ENABLE_STATISTICS>::readDynamicHuffmanCoding( BitReader& bitReader )
 
     /* Create distance HC
      * When encoding base64-encoded random-data, I encountered a length of 9, so uint16_t is necessary! */
-    error = m_distanceHC.initializeFromLengths(
-        VectorView<uint8_t>( m_literalCL.data() + literalCodeCount, distanceCodeCount ) );
+    const VectorView<uint8_t> distanceCodeLengths{ m_literalCL.data() + literalCodeCount, distanceCodeCount };
+    error = m_distanceHC.initializeFromLengths( distanceCodeLengths );
 
     if constexpr ( ENABLE_STATISTICS ) {
         times.createdDistanceHC = now();
@@ -1041,7 +1025,7 @@ Block<ENABLE_STATISTICS>::readDynamicHuffmanCoding( BitReader& bitReader )
     /* Create literal HC */
 #ifdef WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER
     error = m_literalHC.initializeFromLengths( VectorView<uint8_t>( m_literalCL.data(), literalCodeCount ),
-                                               m_distanceHC );
+                                               distanceCodeLengths );
 #else
     error = m_literalHC.initializeFromLengths( VectorView<uint8_t>( m_literalCL.data(), literalCodeCount ) );
 #endif
