@@ -62,7 +62,7 @@ public:
             return errorCode;
         }
 
-        m_lutBitsCount = std::min( LUT_BITS_COUNT, this->m_maxCodeLength );
+        m_lutBitsCount = LUT_BITS_COUNT;
         m_bitsToReadAtOnce = std::max( LUT_BITS_COUNT, this->m_minCodeLength );
 
         /* Initialize the cache. */
@@ -121,7 +121,40 @@ public:
                 continue;
             }
 
-            insertIntoCache( huffmanEntry.reversedCode, cacheEntry );
+            /** @todo This new loop, even though it doesn't do much yet, slows down LUT table creation from 5%
+             *        overhead to 30% overhead! There must be a more efficient way to iterate the second iteration. */
+            for ( size_t j = 0; j < huffmanTableSize; ++j ) {
+                const auto& huffmanEntry2 = huffmanTable[j];
+                const auto reversedCode2 = huffmanEntry.reversedCode
+                                           | ( huffmanEntry2.reversedCode << huffmanEntry.length );
+                /** @todo This generates much more writes than necessary. */
+                if ( huffmanEntry.length + huffmanEntry2.length > m_lutBitsCount ) {
+                    m_codeCache[reversedCode2 & nLowestBitsSet<uint32_t>( m_lutBitsCount )] = cacheEntry;
+                    continue;
+                }
+
+                /** @todo */
+                insertIntoCache( reversedCode2, cacheEntry );
+                continue;
+
+                auto cacheEntry2 = cacheEntry;
+                cacheEntry2.bitsToSkip += huffmanEntry2.length;
+                cacheEntry2.symbols |= huffmanEntry2.symbol << ( cacheEntry.symbolCount * BYTE_SIZE );
+                cacheEntry2.symbolCount += 1;
+                cacheEntry2.needToReadDistanceBits = huffmanEntry2.symbol > END_OF_BLOCK_SYMBOL;
+
+                if ( cacheEntry2.needToReadDistanceBits ) {
+                    /** @todo */
+                    cacheEntry2.needToReadDistanceBits = true;
+                    insertIntoCache( reversedCode2, cacheEntry2 );
+                    continue;
+
+                    insertLengthSymbolIntoCache( reversedCode2, cacheEntry2 );
+                    continue;
+                }
+
+                insertIntoCache( reversedCode2, cacheEntry2 );
+            }
         }
 
         m_needsToBeZeroed = true;
