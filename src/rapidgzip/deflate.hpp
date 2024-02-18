@@ -514,6 +514,22 @@ public:
     using Backreference = std::pair<uint16_t, uint16_t>;
 
 public:
+    ~Block()
+    {
+    #ifdef WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER
+        const auto hits = m_literalHC.statistics().cacheHits;
+        const auto misses = m_literalHC.statistics().cacheMisses;
+        const auto distanceMisses = m_literalHC.statistics().cacheMissesForDistances;
+        const auto total = static_cast<double>( hits + misses + distanceMisses );
+        std::cerr << "Literal Huffman Coding: Cache Hits: " << hits
+                  << ", Distance Cache Misses: " << m_literalHC.statistics().cacheMissesForDistances
+                  << ", Full Cache Misses: " << misses << " -> Full Hit Rate: "
+                  << static_cast<double>( hits ) / total * 100
+                  << " % -> Partial Hit Rate (Even if Distance Missing): "
+                  << static_cast<double>( hits + distanceMisses ) / total * 100 << " %\n";
+    #endif
+    }
+
     [[nodiscard]] bool
     eob() const noexcept
     {

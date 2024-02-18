@@ -40,6 +40,13 @@ public:
         uint16_t distance{ 0 };
     };
 
+    struct Statistics
+    {
+        uint64_t cacheHits{ 0 };
+        uint64_t cacheMisses{ 0 };
+        uint64_t cacheMissesForDistances{ 0 };
+    };
+
 public:
     template<typename DistanceHuffmanCoding>
     [[nodiscard]] constexpr Error
@@ -127,18 +134,27 @@ public:
         try {
             const auto cacheEntry = m_codeCache[bitReader.peek( m_lutBitsCount )];
             if ( cacheEntry.bitsToSkip == 0 ) {
+                ++m_statistics.cacheMisses;
                 return decodeLong( bitReader, distanceHC );
             }
             bitReader.seekAfterPeek( cacheEntry.bitsToSkip );
             if ( cacheEntry.distance == 0xFFFEU ) {
+                ++m_statistics.cacheMissesForDistances;
                 return interpretSymbol( bitReader, distanceHC, cacheEntry.symbolOrLength + 257U );
             }
+            ++m_statistics.cacheHits;
             return cacheEntry;
         } catch ( const typename BitReader::EndOfFileReached& ) {
             /* Should only happen at the end of the file and probably not even there
              * because the bzip2 footer (EOS block) should be longer than the peek length. */
             return interpretSymbol( bitReader, distanceHC, BaseType::decode( bitReader ).value() );
         }
+    }
+
+    [[nodiscard]] constexpr const Statistics&
+    statistics() const noexcept
+    {
+        return m_statistics;
     }
 
 private:
@@ -277,5 +293,7 @@ private:
     uint8_t m_lutBitsCount{ LUT_BITS_COUNT };
     uint8_t m_bitsToReadAtOnce{ LUT_BITS_COUNT };
     bool m_needsToBeZeroed{ false };
+
+    mutable Statistics m_statistics;
 };
 }  // namespace rapidgzip::deflate
