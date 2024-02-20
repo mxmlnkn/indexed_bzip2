@@ -176,9 +176,10 @@ class Build(build_ext):
                 '-DWITH_PYTHON_SUPPORT',
                 '-DWITH_RPMALLOC',
                 '-D_LARGEFILE64_SOURCE=1',
-                '-D_FORTIFY_SOURCE=2',
                 '-D_GLIBCXX_ASSERTIONS',
             ]
+            if supportsFlag(self.compiler, '-D_FORTIFY_SOURCE=2'):
+                ext.extra_compile_args += ['-D_FORTIFY_SOURCE=2']
             if nasmCompiler:
                 ext.extra_compile_args.append('-DWITH_ISAL')
 
