@@ -1,4 +1,17 @@
 
+# Version 0.10.5 built on 2024-02-22
+
+## Fixes
+
+ - Fix segfault with rpmalloc when creating a ParallelGzipReader object on one thread and using it into
+   another thread created manually in Python.
+ - Fix possible GIL deadlock when calling many `RapidgzipFile` methods in quick succession.
+ - Fix many issues with the GIL acquirement code logic.
+ - Avoid segfault when exporting the index for an empty, invalid gzip file.
+ - Use `isattay` instead of poll with 100ms timeout to determine whether rapidgzip is piped to.
+ - Fix build error on macOS when no wheel are available.
+
+
 # Version 0.10.4 built on 2023-11-25
 
 ## Fixes
