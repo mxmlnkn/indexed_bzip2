@@ -342,8 +342,10 @@ public:
         size_t decodedOffsetInBlock{ 0 };
         for ( auto& subchunk : m_subchunks ) {
             decodedOffsetInBlock += subchunk.decodedSize;
-            subchunk.window = std::make_shared<Window>(
-                getWindowAt( window, decodedOffsetInBlock ), windowCompressionType );
+            if ( !subchunk.window ) {
+                subchunk.window = std::make_shared<Window>(
+                    getWindowAt( window, decodedOffsetInBlock ), windowCompressionType );
+            }
         }
         statistics.compressWindowDuration += duration( tWindowCompressionStart );
     }
@@ -359,6 +361,12 @@ public:
 
     void
     setEncodedOffset( size_t offset );
+
+    void
+    setSubchunks( std::vector<Subchunk>&& newSubchunks )
+    {
+        m_subchunks = std::move( newSubchunks );
+    }
 
     /**
      * @note Probably should not be called internally because it is allowed to be shadowed by a child class method.
@@ -392,7 +400,9 @@ public:
         encodedSizeInBits = newEncodedEndOffsetInBits - encodedOffsetInBits;
         decodedSizeInBytes = BaseType::size();
 
-        m_subchunks = split( splitChunkSize );
+        if ( m_subchunks.empty() ) {
+            m_subchunks = split( splitChunkSize );
+        }
     }
 
     /**
@@ -590,6 +600,7 @@ ChunkData::setEncodedOffset( size_t offset )
     encodedOffsetInBits = offset;
     maxEncodedOffsetInBits = offset;
 
+    /* Adjust the encoded offset of the first subchunk because it may have been a range at the time of splitting. */
     if ( !m_subchunks.empty() ) {
         const auto nextSubchunk = std::next( m_subchunks.begin() );
         const auto nextOffset = nextSubchunk == m_subchunks.end() ? encodedEndOffsetInBits : nextSubchunk->encodedOffset;
