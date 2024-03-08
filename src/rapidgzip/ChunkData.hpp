@@ -407,8 +407,9 @@ public:
 
     /**
      * Appends a deflate block boundary.
+     * @return true if it was appended, false if the last boundary is identical to the given one.
      */
-    void
+    bool
     appendDeflateBlockBoundary( const size_t encodedOffset,
                                 const size_t decodedOffset )
     {
@@ -417,7 +418,9 @@ public:
              || ( blockBoundaries.back().decodedOffset != decodedOffset ) )
         {
             blockBoundaries.emplace_back( BlockBoundary{ encodedOffset, decodedOffset } );
+            return true;
         }
+        return false;
     }
 
     /**
@@ -491,6 +494,17 @@ public:
     subchunks() const noexcept
     {
         return m_subchunks;
+    }
+
+    /**
+     * Chunks smaller than the returned value should not be created. In practice, this currently means that
+     * such small chunks are appended to the previous one. This means however that some chunks can grow
+     * larger than splitChunkSize.
+     */
+    [[nodiscard]] constexpr size_t
+    minimumSplitChunkSize() const
+    {
+        return splitChunkSize / 4U;
     }
 
     /**

@@ -183,7 +183,7 @@ public:
         /* Finalize started subchunk. Merge with previous one if it is very small. */
         subchunks.back().encodedSize = nextBlockOffset - subchunks.back().encodedOffset;
         if ( ( subchunks.size() >= 2 )
-             && ( subchunks.back().decodedSize < result.splitChunkSize / 8U ) )
+             && ( subchunks.back().decodedSize < result.minimumSplitChunkSize() ) )
         {
             const auto lastSubchunk = subchunks.back();
             subchunks.pop_back();
