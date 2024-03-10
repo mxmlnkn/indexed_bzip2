@@ -152,6 +152,7 @@ struct ChunkData :
         size_t encodedSize{ 0 };
         size_t decodedSize{ 0 };
         SharedWindow window{};
+        std::vector<bool> usedWindowSymbols{};
     };
 
     class Statistics
@@ -342,10 +343,20 @@ public:
         size_t decodedOffsetInBlock{ 0 };
         for ( auto& subchunk : m_subchunks ) {
             decodedOffsetInBlock += subchunk.decodedSize;
-            if ( !subchunk.window ) {
-                subchunk.window = std::make_shared<Window>(
-                    getWindowAt( window, decodedOffsetInBlock ), windowCompressionType );
+            if ( subchunk.window ) {
+                continue;
             }
+
+            auto subchunkWindow = getWindowAt( window, decodedOffsetInBlock );
+            /* Set unused symbols to 0 to increase compressibility. */
+            if ( subchunkWindow.size() == subchunk.usedWindowSymbols.size() ) {
+                for ( size_t i = 0; i < subchunkWindow.size(); ++i ) {
+                    if ( !subchunk.usedWindowSymbols[i] ) {
+                        subchunkWindow[i] = 0;
+                    }
+                }
+            }
+            subchunk.window = std::make_shared<Window>( std::move( subchunkWindow ), windowCompressionType );
         }
         statistics.compressWindowDuration += duration( tWindowCompressionStart );
     }

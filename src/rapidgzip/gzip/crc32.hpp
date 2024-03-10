@@ -338,4 +338,12 @@ protected:
     uint32_t m_crc32{ ~uint32_t( 0 ) };
     bool m_enabled{ true };
 };
+
+
+[[nodiscard]] uint32_t
+crc32( const void* const buffer,
+       const size_t      size )
+{
+    return ~updateCRC32<>( ~uint32_t( 0 ), reinterpret_cast<const char*>( buffer ), size );
+}
 }  // namespace rapidgzip
