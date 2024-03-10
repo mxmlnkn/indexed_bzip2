@@ -75,12 +75,28 @@ public:
     static void
     appendDeflateBlockBoundary( ChunkData&             chunk,
                                 std::vector<Subchunk>& subchunks,
+                                BitReader&             bitReader,
                                 const size_t           encodedOffset,
                                 const size_t           decodedOffset )
     {
         /* Try to append the block boundary, and preemptively return if the boundary already exists. */
         if ( !chunk.appendDeflateBlockBoundary( encodedOffset, decodedOffset ) ) {
             return;
+        }
+
+        if ( subchunks.empty() ) {
+            return;
+        }
+
+        /* Get the window as soon as possible (ensure that we were able to decode MAX_WINDOW_SIZE successfully)
+         * to avoid costly long seeks back outside the BitReader buffer. Especially, don't do it during chunk
+         * splitting because it would be too late in general. */
+        if ( subchunks.back().usedWindowSymbols.empty()
+             && ( subchunks.back().decodedSize >= deflate::MAX_WINDOW_SIZE ) )
+        {
+            const Finally seekBack{ [&bitReader, oldOffset = bitReader.tell()] () { bitReader.seek( oldOffset ); } };
+            bitReader.seek( subchunks.back().encodedOffset );
+            subchunks.back().usedWindowSymbols = deflate::getUsedWindowSymbols( bitReader );
         }
 
         /* Do on-the-fly chunk splitting. */
@@ -228,7 +244,7 @@ public:
         auto alreadyDecoded = result.size();
 
         if ( ( alreadyDecoded > 0 ) && !bitReader->eof() ) {
-            appendDeflateBlockBoundary( result, subchunks, nextBlockOffset, alreadyDecoded );
+            appendDeflateBlockBoundary( result, subchunks, *bitReader, nextBlockOffset, alreadyDecoded );
         }
 
         IsalInflateWrapper inflateWrapper{ BitReader( *bitReader ) };
@@ -319,7 +335,8 @@ public:
                      * offset as @ref result and it also would have the same problem that the real offset is ambiguous
                      * for non-compressed blocks. */
                     if ( alreadyDecoded + nBytesRead > 0 ) {
-                        appendDeflateBlockBoundary( result, subchunks, nextBlockOffset, alreadyDecoded + nBytesRead );
+                        appendDeflateBlockBoundary( result, subchunks, *bitReader,
+                                                    nextBlockOffset, alreadyDecoded + nBytesRead );
                     }
 
                     if ( alreadyDecoded >= maxDecompressedChunkSize ) {
@@ -506,7 +523,7 @@ public:
              * offset as @ref result and it also would have the same problem that the real offset is ambiguous
              * for non-compressed blocks. */
             if ( totalBytesRead > 0 ) {
-                appendDeflateBlockBoundary( result, subchunks, nextBlockOffset, totalBytesRead );
+                appendDeflateBlockBoundary( result, subchunks, *bitReader, nextBlockOffset, totalBytesRead );
             }
 
             /* Loop until we have read the full contents of the current deflate block-> */

@@ -353,6 +353,24 @@ toString( std::future_status status ) noexcept
 }
 
 
+class Finally
+{
+public:
+    explicit
+    Finally( std::function<void()>&& cleanup ) :
+        m_cleanup( std::move( cleanup ) )
+    {}
+
+    ~Finally()
+    {
+        m_cleanup();
+    }
+
+private:
+    const std::function<void()> m_cleanup;
+};
+
+
 /**
  * RAII based notify at the end of a scope, which will also be triggered e.g. when throwing exceptions!
  * std::notify_all_at_thread_exit is no alternative to this because the thread does not exit because we are using

@@ -152,6 +152,7 @@ struct ChunkData :
         size_t encodedSize{ 0 };
         size_t decodedSize{ 0 };
         SharedWindow window{};
+        std::vector<bool> usedWindowSymbols{};
     };
 
     class Statistics
@@ -343,8 +344,26 @@ public:
         for ( auto& subchunk : m_subchunks ) {
             decodedOffsetInBlock += subchunk.decodedSize;
             if ( !subchunk.window ) {
-                subchunk.window = std::make_shared<Window>(
-                    getWindowAt( window, decodedOffsetInBlock ), windowCompressionType );
+                auto subchunkWindow = getWindowAt( window, decodedOffsetInBlock );
+                /* Set unused symbols to 0 to increase compressibility.
+                 * @todo FAILS!!!
+                 * Test with:
+                 *   m rapidgzip && src/tools/rapidgzip -d -c --export-index
+                     test-files/fastq/SRR22403185_2.fastq.gz{.sparse.index,} | md5sum
+                 *     2c7724d7fb38b2f80048d836232f1759
+                 *   m rapidgzip && src/tools/rapidgzip -d -c --import-index
+                     test-files/fastq/SRR22403185_2.fastq.gz{.sparse.index,} | md5sum
+                 *     7a88b604958361ce663e72b62f60c428
+                 * @todo add as test if not already exists
+                 */
+                if ( subchunkWindow.size() == subchunk.usedWindowSymbols.size() ) {
+                    for ( size_t i = 0; i < subchunkWindow.size(); ++i ) {
+                        if ( !subchunk.usedWindowSymbols[i] ) {
+                            subchunkWindow[i] = 0;
+                        }
+                    }
+                }
+                subchunk.window = std::make_shared<Window>( std::move( subchunkWindow ), windowCompressionType );
             }
         }
         statistics.compressWindowDuration += duration( tWindowCompressionStart );
