@@ -108,16 +108,45 @@ jobs:
 
   Check-Without-Isal:
     name: Check without Sanitizer and without ISA-L
+
     # And especially without -DSHORT_TESTS, which makes it non redundant to the sanitizer checks!
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-12, macos-13, windows-latest]
+
     steps:
+    - name: System Information
+      if: "! startsWith(matrix.os, 'windows')"
+      run: |
+        uname -a
+
+    - name: Print Architecture
+      if: "startsWith(matrix.os, 'macos')"
+      run: |
+        sysctl -n machdep.cpu.brand_string
+        arch
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Install Dependencies
+    - name: Install System Dependencies
+      if: "startsWith(matrix.os , 'ubuntu')"
       run: |
         sudo apt-get -y install g++ ninja-build gzip tabix pigz libarchive-dev zlib1g-dev isal nasm
+
+    - name: Fix pip
+      if: "startsWith(matrix.os , 'macos')"
+      run: |
+        mkdir -p "$HOME/Library/Application Support/pip"
+        cat <<EOF >> "$HOME/Library/Application Support/pip/pip.conf"
+        [global]
+        break-system-packages = true
+        EOF
+
+    - name: Install Python Dependencies
+      run: |
         python3 -m pip install --upgrade pip
         python3 -m pip install --upgrade-strategy eager --upgrade indexed_gzip pgzip
 
@@ -266,7 +295,13 @@ jobs:
 
   Ibzip2-Tests:
     name: Ibzip2 Tests
-    runs-on: ubuntu-22.04
+
+    # And especially without -DSHORT_TESTS, which makes it non redundant to the sanitizer checks!
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-13, macos-14, windows-latest]
+
     steps:
     - uses: actions/checkout@v4
       with:
