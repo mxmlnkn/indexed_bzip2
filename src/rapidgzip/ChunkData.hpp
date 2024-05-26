@@ -102,6 +102,7 @@ struct ChunkData :
         bool crc32Enabled{ true };
         std::optional<CompressionType> windowCompressionType;
         bool windowSparsity{ true };
+        bool countNewlines{ false };
     };
 
     struct Subchunk
@@ -113,9 +114,17 @@ struct ChunkData :
                    && ( decodedOffset == other.decodedOffset )
                    && ( encodedSize == other.encodedSize )
                    && ( decodedSize == other.decodedSize )
+                   && ( newlineCount == other.newlineCount )
                    && ( static_cast<bool>( window ) == static_cast<bool>( other.window ) )
                    && ( !static_cast<bool>( window ) || !static_cast<bool>( other.window )
                         || ( *window == *other.window ) );
+        }
+
+        [[nodiscard]] bool
+        hasBeenPostProcessed( const bool requireNewlineCount ) const
+        {
+            return static_cast<bool>( window ) && usedWindowSymbols.empty()
+                   && ( newlineCount.has_value() || !requireNewlineCount );
         }
 
     public:
@@ -123,6 +132,7 @@ struct ChunkData :
         size_t decodedOffset{ 0 };
         size_t encodedSize{ 0 };
         size_t decodedSize{ 0 };
+        std::optional<size_t> newlineCount{};
         SharedWindow window{};
         std::vector<bool> usedWindowSymbols{};
     };
@@ -169,6 +179,7 @@ public:
         fileType( configuration.fileType ),
         splitChunkSize( configuration.splitChunkSize ),
         windowSparsity( configuration.windowSparsity ),
+        countNewlines( configuration.countNewlines ),
         m_windowCompressionType( configuration.windowCompressionType )
     {
         setCRC32Enabled( configuration.crc32Enabled );
@@ -321,28 +332,53 @@ public:
         size_t decodedOffsetInBlock{ 0 };
         for ( auto& subchunk : m_subchunks ) {
             decodedOffsetInBlock += subchunk.decodedSize;
-            if ( subchunk.window ) {
-                subchunk.usedWindowSymbols = std::vector<bool>();  // Free memory just to be sure!
-                continue;
-            }
 
-            auto subchunkWindow = getWindowAt( window, decodedOffsetInBlock );
-            /* Set unused symbols to 0 to increase compressibility. */
-            if ( subchunkWindow.size() == subchunk.usedWindowSymbols.size() ) {
-                for ( size_t i = 0; i < subchunkWindow.size(); ++i ) {
-                    if ( !subchunk.usedWindowSymbols[i] ) {
-                        subchunkWindow[i] = 0;
+            if ( !subchunk.window ) {
+                auto subchunkWindow = getWindowAt( window, decodedOffsetInBlock );
+                /* Set unused symbols to 0 to increase compressibility. */
+                if ( subchunkWindow.size() == subchunk.usedWindowSymbols.size() ) {
+                    for ( size_t i = 0; i < subchunkWindow.size(); ++i ) {
+                        if ( !subchunk.usedWindowSymbols[i] ) {
+                            subchunkWindow[i] = 0;
+                        }
                     }
                 }
+                subchunk.window = std::make_shared<Window>( std::move( subchunkWindow ), windowCompressionType );
             }
             subchunk.usedWindowSymbols = std::vector<bool>();  // Free memory!
-            subchunk.window = std::make_shared<Window>( std::move( subchunkWindow ), windowCompressionType );
+
+            /* Count lines if requested. */
+            if ( countNewlines && !subchunk.newlineCount ) {
+                size_t newlineCount = 0;
+                using rapidgzip::deflate::DecodedData;
+                for ( auto it = DecodedData::Iterator( *this, subchunk.decodedOffset, subchunk.decodedSize );
+                      static_cast<bool>( it ); ++it )
+                {
+                    const auto& [buffer, size] = *it;
+                    newlineCount += rapidgzip::countNewlines( { reinterpret_cast<const char*>( buffer ), size } );
+                }
+                subchunk.newlineCount = newlineCount;
+            }
         }
         statistics.compressWindowDuration += duration( tWindowCompressionStart );
 
+        /* Check that it counts as fully post-processed from here on. */
         if ( !hasBeenPostProcessed() ) {
             std::stringstream message;
-            message << "[Info] Chunk is not recognized as post-processed even though it has been!\n";
+            message << "[Info] Chunk is not recognized as post-processed even though it has been!\n"
+                    << "[Info]    Subchunks : " << m_subchunks.size() << "\n"
+                    << "[Info]    Contains markers : " << containsMarkers() << "\n";
+            for ( auto& subchunk : m_subchunks ) {
+                if ( subchunk.hasBeenPostProcessed( countNewlines ) ) {
+                    continue;
+                }
+                message << "[Info] Subchunk is not recognized as post-processed even though it has been!\n"
+                        << "[Info]    Has window : " << static_cast<bool>( subchunk.window ) << "\n"
+                        << "[Info]    Used window symbols empty : " << subchunk.usedWindowSymbols.empty() << "\n";
+                if ( countNewlines ) {
+                    message << "[Info]    Has newline count : " << subchunk.newlineCount.has_value() << "\n";
+                }
+            }
         #ifdef RAPIDGZIP_FATAL_PERFORMANCE_WARNINGS
             throw std::logic_error( std::move( message ).str() );
         #else
@@ -448,12 +484,10 @@ public:
     [[nodiscard]] bool
     hasBeenPostProcessed() const
     {
-        const auto subchunkHasBeenProcessed =
-            [] ( const auto& subchunk ) {
-                return static_cast<bool>( subchunk.window ) && subchunk.usedWindowSymbols.empty();
-            };
         return !m_subchunks.empty() && !containsMarkers()
-               && std::all_of( m_subchunks.begin(), m_subchunks.end(), subchunkHasBeenProcessed );
+               && std::all_of( m_subchunks.begin(), m_subchunks.end(), [this] ( const auto& subchunk ) {
+                      return subchunk.hasBeenPostProcessed( countNewlines );
+                  } );
     }
 
     [[nodiscard]] const std::vector<Subchunk>&
@@ -523,6 +557,7 @@ public:
     bool stoppedPreemptively{ false };
 
     bool windowSparsity{ true };
+    bool countNewlines{ false };
 
 protected:
     /**

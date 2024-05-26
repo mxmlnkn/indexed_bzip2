@@ -44,6 +44,7 @@ struct Arguments
     bool windowSparsity{ true };
     bool gatherLineOffsets{ false };
     IndexFormat indexFormat{ IndexFormat::INDEXED_GZIP };
+    std::optional<std::vector<FileRange> > fileRanges{};
 };
 
 
@@ -118,6 +119,15 @@ printIndexAnalytics( const Reader& reader )
                   << "    Total Compressed Window Size: " << formatBytes( compressedWindowSize ) << "\n"
                   << "    Total Decompressed Window Size: " << formatBytes( decompressedWindowSize ) << "\n";
     }
+
+    const auto& newlineOffsets = reader->newlineOffsets();
+    if ( !newlineOffsets.empty() ) {
+        const auto maxLineOffset = std::accumulate(
+            newlineOffsets.begin(), newlineOffsets.end(), uint64_t( 0 ), [] ( auto a, auto offset ) {
+                return std::max( a, offset.lineOffset );
+            } );
+        std::cerr << "    Largest Newline Offset: " << maxLineOffset << "\n";
+    }
 }
 
 
@@ -138,11 +148,16 @@ decompressParallel( const Arguments&   args,
     using Reader = rapidgzip::ParallelGzipReader<ChunkData>;
     auto reader = std::make_unique<Reader>( std::move( inputFile ), args.decoderParallelism, args.chunkSize );
 
+    const auto gatherLineOffsets =
+        args.gatherLineOffsets
+        || ( !args.indexSavePath.empty() && ( args.indexFormat == IndexFormat::GZTOOL_WITH_LINES ) );
+
     reader->setStatisticsEnabled( args.verbose );
     reader->setShowProfileOnDestruction( args.verbose );
     reader->setCRC32Enabled( args.crc32Enabled );
     reader->setKeepIndex( !args.indexSavePath.empty() || !args.indexLoadPath.empty() || args.keepIndex );
     reader->setWindowSparsity( args.windowSparsity );
+    reader->setCountNewlines( gatherLineOffsets );
     if ( ( args.indexFormat == IndexFormat::GZTOOL ) || ( args.indexFormat == IndexFormat::GZTOOL_WITH_LINES ) ) {
         /* Compress with zlib instead of gzip to avoid recompressions when exporting the index. */
         reader->setWindowCompressionType( CompressionType::ZLIB );
@@ -156,9 +171,7 @@ decompressParallel( const Arguments&   args,
         }
     }
 
-    if ( args.gatherLineOffsets
-         || ( !args.indexSavePath.empty() && ( args.indexFormat == IndexFormat::GZTOOL_WITH_LINES ) ) )
-    {
+    if ( gatherLineOffsets && args.fileRanges ) {
         reader->gatherLineOffsets();
     }
 
@@ -166,6 +179,10 @@ decompressParallel( const Arguments&   args,
         readFunctor( reader );
     } catch ( const BrokenPipeException& ) {
         return DecompressErrorCode::BROKEN_PIPE;
+    }
+
+    if ( gatherLineOffsets && !args.fileRanges ) {
+        reader->gatherLineOffsets();
     }
 
     if ( !args.indexSavePath.empty() ) {
@@ -420,14 +437,13 @@ rapidgzipCLI( int                  argc,
     const auto decompress = ( parsedArgs.count( "decompress" ) > 0 ) || ( parsedArgs.count( "ranges" ) > 0 ) || doTest;
 
     /* Parse ranges. */
-    std::optional<std::vector<FileRange> > fileRanges;
     if ( parsedArgs.count( "ranges" ) > 0 ) {
-        fileRanges = parseFileRanges( parsedArgs["ranges"].as<std::string>() );
+        args.fileRanges = parseFileRanges( parsedArgs["ranges"].as<std::string>() );
 
         /* Check whether the index needs to be kept because the ranges do not traverse the file in order. */
-        if ( fileRanges->size() > 1 ) {
-            for ( size_t i = 0; i + 1 < fileRanges->size(); ++i ) {
-                if ( fileRanges->at( i ).offset + fileRanges->at( i ).size > fileRanges->at( i + 1 ).offset ) {
+        if ( args.fileRanges->size() > 1 ) {
+            for ( size_t i = 0; i + 1 < args.fileRanges->size(); ++i ) {
+                if ( args.fileRanges->at( i ).offset + args.fileRanges->at( i ).size > args.fileRanges->at( i + 1 ).offset ) {
                     args.keepIndex = true;
                     break;
                 }
@@ -435,7 +451,7 @@ rapidgzipCLI( int                  argc,
         }
 
         /* Check whether some ranges are lines and enable line offset gathering in that case. */
-        for ( const auto& range : *fileRanges ) {
+        for ( const auto& range : *args.fileRanges ) {
             if ( ( range.size > 0 ) && ( range.offsetIsLine || range.sizeIsLine ) ) {
                 /* Because we cannot arbitrarily convert lines to offsets, we cannot easily determine whether
                  * backward seeking is necessary. Therefore keep the index if line offsets are used. */
@@ -679,7 +695,7 @@ rapidgzipCLI( int                  argc,
 
         errorCode = decompressParallel<rapidgzip::ChunkData>(
             args, std::move( inputFile ), [&] ( const auto& reader ) {
-                if ( !fileRanges ) {
+                if ( !args.fileRanges ) {
                     if ( !hasOutputFiles && countLines && !reader->newlineOffsets().empty() ) {
                         const auto& newlineOffset = reader->newlineOffsets().back();
                         newlineCount = newlineOffset.lineOffset;
@@ -692,16 +708,15 @@ rapidgzipCLI( int                  argc,
                     return;
                 }
 
-                for ( const auto& range : *fileRanges ) {
+                for ( const auto& range : *args.fileRanges ) {
                     if ( range.size == 0 ) {
                         continue;
                     }
 
                     if ( ( ( range.offsetIsLine && ( range.offset > 0 ) ) || range.sizeIsLine )
-                         && !reader->newlineFormat() )
+                         && reader->newlineOffsets().empty() )
                     {
-                        throw std::invalid_argument( "Currently, seeking and reading lines only works when "
-                                                     "importing gztool indexes created with -x or -X!" );
+                        throw std::logic_error( "There should be newline offset information at this point!" );
                     }
 
                     /* Seek to line or byte offset. Note that line 0 starts at byte 0 by definition. */
