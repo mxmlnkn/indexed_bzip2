@@ -87,12 +87,6 @@ public:
     using WriteFunctor = std::function<void ( const std::shared_ptr<ChunkData>&, size_t, size_t )>;
     using Window = WindowMap::Window;
 
-    struct NewlineOffset
-    {
-        uint64_t lineOffset{ 0 };
-        uint64_t uncompressedOffsetInBytes{ 0 };
-    };
-
 public:
     /**
      * Quick benchmarks for spacing on AMD Ryzen 3900X 12-core.
@@ -752,11 +746,11 @@ public:
         index.windowSizeInBytes = 32_Ki;
 
         if ( withLineOffsets ) {
-            if ( !m_newlineFormat ) {
+            if ( m_newlineOffsets->empty() ) {
                 throw std::runtime_error( "Cannot add line offsets to index when they were not gathered!" );
             }
             index.hasLineOffsets = true;
-            index.newlineFormat = m_newlineFormat.value();
+            index.newlineFormat = NewlineFormat::LINE_FEED;
         }
 
         /* Heuristically determine a checkpoint spacing from the existing checkpoints. */
@@ -766,14 +760,14 @@ public:
         }
         index.checkpointSpacing = maximumDecompressedSpacing / 32_Ki * 32_Ki;
 
-        auto lineOffset = m_newlineOffsets.begin();
+        auto lineOffset = m_newlineOffsets->begin();
         for ( const auto& [compressedOffsetInBits, uncompressedOffsetInBytes] : offsets ) {
             Checkpoint checkpoint;
             checkpoint.compressedOffsetInBits = compressedOffsetInBits;
             checkpoint.uncompressedOffsetInBytes = uncompressedOffsetInBytes;
 
             if ( index.hasLineOffsets ) {
-                while ( ( lineOffset != m_newlineOffsets.end() )
+                while ( ( lineOffset != m_newlineOffsets->end() )
                         && ( lineOffset->uncompressedOffsetInBytes < uncompressedOffsetInBytes ) )
                 {
                     ++lineOffset;
@@ -846,16 +840,16 @@ public:
         return m_maxDecompressedChunkSize;
     }
 
-    [[nodiscard]] const std::optional<NewlineFormat>&
+    [[nodiscard]] std::optional<NewlineFormat>
     newlineFormat() const noexcept
     {
-        return m_newlineFormat;
+        return NewlineFormat::LINE_FEED;
     }
 
     [[nodiscard]] const std::vector<NewlineOffset>&
     newlineOffsets() const noexcept
     {
-        return m_newlineOffsets;
+        return *m_newlineOffsets;
     }
 
 private:
@@ -909,11 +903,11 @@ public:
 
         m_indexIsImported = true;
         m_keepIndex = true;
+        m_countNewlines = false;  // Disable on the fly counting because it is not possible after index import.
 
-        if ( index.hasLineOffsets ) {
-            m_newlineFormat = index.newlineFormat;
-            m_newlineOffsets.resize( index.checkpoints.size() );
-            std::transform( index.checkpoints.begin(), index.checkpoints.end(), m_newlineOffsets.begin(),
+        if ( index.hasLineOffsets && ( index.newlineFormat == NewlineFormat::LINE_FEED ) ) {
+            m_newlineOffsets->resize( index.checkpoints.size() );
+            std::transform( index.checkpoints.begin(), index.checkpoints.end(), m_newlineOffsets->begin(),
                             [] ( const auto& checkpoint ) {
                 NewlineOffset newlineOffset;
                 newlineOffset.lineOffset = checkpoint.lineOffset;
@@ -925,7 +919,7 @@ public:
              * We are not sorting here because it may be impossible to sort by line offsets and uncompressed offsets
              * for inconsistent index data! */
             const auto lessLineOffset = [] ( const auto& a, const auto& b ) { return a.lineOffset < b.lineOffset; };
-            if ( !std::is_sorted( m_newlineOffsets.begin(), m_newlineOffsets.end(), lessLineOffset ) ) {
+            if ( !std::is_sorted( m_newlineOffsets->begin(), m_newlineOffsets->end(), lessLineOffset ) ) {
                 throw std::invalid_argument( "Index checkpoints must be sorted by line offsets!" );
             }
         }
@@ -1062,17 +1056,27 @@ public:
 #endif
 
     void
-    gatherLineOffsets( NewlineFormat newlineFormat = NewlineFormat::LINE_FEED )
+    gatherLineOffsets()
     {
         /* Check whether the newline information has already been collected from an imported index or earlier call. */
-        if ( m_newlineFormat && !m_newlineOffsets.empty() ) {
+        if ( !m_newlineOffsets->empty() ) {
             return;
         }
 
         const Finally restorePosition{ [this, oldOffset = tell()] () { seek( oldOffset ); } };
-        seekTo( 0 );
 
-        m_newlineFormat = newlineFormat;
+        /* If it was already toggled on, simply read until the end to gather all offsets. */
+        if ( m_countNewlines && ( !m_blockMap || m_blockMap->empty() ) ) {
+            read();
+            return;
+        }
+
+        /* This logic also works when some chunks have been read with m_countNewlines == false. */
+
+        seekTo( 0 );
+        /* Disable line counting to avoid intereference, but for this code path, either an index has been imported
+         * or m_countNewlines is already false. But, it still cannot hurt to disable it. */
+        m_countNewlines = false;
 
         /* Collect line offsets until the next chunk offset has been added to the map. Then, we can look for the
          * line number at that exact chunk offset and insert it and clear our temporary results. */
@@ -1080,10 +1084,9 @@ public:
         /** Index i stores the byte offset for the (processedLines + i)-th line. */
         std::vector<uint64_t> newlineOffsets;
         uint64_t processedBytes{ 0 };
-        const auto newlineCharacter = newlineFormat == NewlineFormat::LINE_FEED ? '\n' : '\r';
 
         const auto collectLineOffsets =
-            [this, &processedLines, &newlineOffsets, &processedBytes, newlineCharacter]
+            [this, &processedLines, &newlineOffsets, &processedBytes]
             ( const std::shared_ptr<rapidgzip::ChunkData>& chunkData,
               const size_t                                 offsetInChunk,
               const size_t                                 dataToWriteSize )
@@ -1095,6 +1098,7 @@ public:
                     const auto& [buffer, size] = *it;
 
                     const std::string_view view{ reinterpret_cast<const char*>( buffer ), size };
+                    const auto newlineCharacter = '\n';
                     for ( auto position = view.find( newlineCharacter, 0 );
                           position != std::string_view::npos;
                           position = view.find( newlineCharacter, position + 1 ) )
@@ -1115,22 +1119,22 @@ public:
                         break;
                     }
 
-                    if ( m_newlineOffsets.empty() || ( m_newlineOffsets.back().uncompressedOffsetInBytes != *it ) ) {
+                    if ( m_newlineOffsets->empty() || ( m_newlineOffsets->back().uncompressedOffsetInBytes != *it ) ) {
                         NewlineOffset newlineOffset;
                         newlineOffset.lineOffset = static_cast<uint64_t>( std::distance( newlineOffsets.begin(), it ) )
                                                    + processedLines;
                         newlineOffset.uncompressedOffsetInBytes = chunkInfo.decodedOffsetInBytes;
 
-                        if ( !m_newlineOffsets.empty() ) {
-                            if ( m_newlineOffsets.back().uncompressedOffsetInBytes > *it ) {
+                        if ( !m_newlineOffsets->empty() ) {
+                            if ( m_newlineOffsets->back().uncompressedOffsetInBytes > *it ) {
                                 throw std::logic_error( "Got earlier chunk offset than the last processed one!" );
                             }
-                            if ( m_newlineOffsets.back().lineOffset > newlineOffset.lineOffset ) {
+                            if ( m_newlineOffsets->back().lineOffset > newlineOffset.lineOffset ) {
                                 throw std::logic_error( "Got earlier line offset than the last processed one!" );
                             }
                         }
 
-                        m_newlineOffsets.emplace_back( newlineOffset );
+                        m_newlineOffsets->emplace_back( newlineOffset );
                     }
 
                     /* Skip over all newlines still in the last processed chunk. */
@@ -1146,11 +1150,11 @@ public:
         read( collectLineOffsets );
 
         /* Insert information for the end-of-file offset. */
-        if ( m_newlineOffsets.empty() || ( processedBytes > m_newlineOffsets.back().uncompressedOffsetInBytes ) ) {
+        if ( m_newlineOffsets->empty() || ( processedBytes > m_newlineOffsets->back().uncompressedOffsetInBytes ) ) {
             NewlineOffset newlineOffset;
             newlineOffset.uncompressedOffsetInBytes = processedBytes;
             newlineOffset.lineOffset = processedLines + newlineOffsets.size();
-            m_newlineOffsets.emplace_back( newlineOffset );
+            m_newlineOffsets->emplace_back( newlineOffset );
         }
     }
 
@@ -1206,6 +1210,18 @@ public:
     {
         m_windowSparsity = useSparseWindows;
         updateWindowCompression();
+    }
+
+    void
+    setCountNewlines( bool countNewlines )
+    {
+        if ( !m_newlineOffsets->empty() || ( m_blockMap && !m_blockMap->empty() ) ) {
+            throw std::invalid_argument( "May not change newline counting behavior after some chunks have been read!" );
+        }
+        m_countNewlines = countNewlines;
+        if ( m_chunkFetcher ) {
+            m_chunkFetcher->setCountNewlines( m_countNewlines );
+        }
     }
 
     void
@@ -1280,7 +1296,7 @@ private:
         blockFinder();
 
         m_chunkFetcher = std::make_unique<ChunkFetcher>( ensureSharedFileReader( m_sharedFileReader->clone() ),
-                                                         m_blockFinder, m_blockMap, m_windowMap,
+                                                         m_blockFinder, m_blockMap, m_windowMap, m_newlineOffsets,
                                                          m_fetcherParallelization );
 
         if ( !m_chunkFetcher ) {
@@ -1291,6 +1307,7 @@ private:
         m_chunkFetcher->setMaxDecompressedChunkSize( m_maxDecompressedChunkSize );
         m_chunkFetcher->setShowProfileOnDestruction( m_showProfileOnDestruction );
         m_chunkFetcher->setStatisticsEnabled( m_statisticsEnabled );
+        m_chunkFetcher->setCountNewlines( m_countNewlines );
         updateWindowCompression();
 
         return *m_chunkFetcher;
@@ -1400,10 +1417,13 @@ private:
      * in order into @ref m_blockMap.
      */
     std::shared_ptr<WindowMap> const m_windowMap{ std::make_shared<WindowMap>() };
+
     bool m_keepIndex{ true };
     bool m_windowSparsity{ true };
+    bool m_countNewlines{ false };
     std::optional<CompressionType> m_windowCompressionType;
     std::unique_ptr<ChunkFetcher> m_chunkFetcher;
+
     /**
      * Note that the uncompressed offset can point to any byte offset inside the line depending on how the chunks
      * are split. Only the offset to the 0-th line is exact of course. To get any other line beginning exactly,
@@ -1412,8 +1432,9 @@ private:
      * a simply vector of values. Line offsets are only available at spacings. To get an exact line offset, you
      * need to start reading from the next smaller one and skip over as many newline characters as necessary.
      */
-    std::vector<NewlineOffset> m_newlineOffsets;
-    std::optional<NewlineFormat> m_newlineFormat;
+    std::shared_ptr<std::vector<NewlineOffset> > const m_newlineOffsets{
+        std::make_shared<std::vector<NewlineOffset>>()
+    };
 
     CRC32Calculator m_crc32;
     uint64_t m_nextCRC32ChunkOffset{ 0 };
