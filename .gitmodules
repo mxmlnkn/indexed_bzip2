@@ -16,3 +16,6 @@
 [submodule "src/external/zlib-ng"]
 	path = src/external/zlib-ng
 	url = https://github.com/zlib-ng/zlib-ng.git
+[submodule "src/external/lz4"]
+	path = src/external/lz4
+	url = https://github.com/lz4/lz4.git

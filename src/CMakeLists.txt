@@ -39,6 +39,28 @@ if (ENABLE_RPMALLOC_STATISTICS)
 	target_compile_definitions(rpmalloc PRIVATE -DENABLE_STATISTICS=1)
 endif()
 
+
+# lz4
+
+project(lz4 C)
+
+add_library(lz4 STATIC)
+set(LZ4_HOME "${CMAKE_CURRENT_SOURCE_DIR}/external/lz4/lib")
+target_include_directories(lz4 SYSTEM PUBLIC ${LZ4_HOME})
+target_sources(lz4 PRIVATE
+    ${LZ4_HOME}/lz4.c
+    ${LZ4_HOME}/lz4.h
+    ${LZ4_HOME}/lz4frame.c
+    ${LZ4_HOME}/lz4frame.h
+    ${LZ4_HOME}/lz4hc.c
+    ${LZ4_HOME}/lz4hc.h
+    ${LZ4_HOME}/xxhash.c
+    ${LZ4_HOME}/xxhash.h
+)
+#set_target_properties(lz4 PROPERTIES C_STANDARD 11)
+set_target_properties(lz4 PROPERTIES LINKER_LANGUAGE C)
+
+
 #add_subdirectory(external/zlib)
 
 if(NOT LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB AND LIBRAPIDARCHIVE_USE_ZLIB_NG)
