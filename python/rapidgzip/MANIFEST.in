@@ -39,6 +39,8 @@ include src/external/zlib/zconf.h
 include src/external/zlib/zutil.c
 include src/external/zlib/zutil.h
 include src/external/zlib/zlib.h
+recursive-include src/external/lz4/lib *.h
+recursive-include src/external/lz4/lib *.c
 recursive-include src/external/isa-l *.h
 recursive-include src/external/isa-l *.c
 recursive-include src/external/isa-l *.asm

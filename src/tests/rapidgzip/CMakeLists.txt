@@ -13,6 +13,7 @@ function(addRapidgzipTest name)
     # 27/28 Test #27: testParallelGzipReader ...........***Timeout 1500.55 sec
     # 28/28 Test #28: testCLI ..........................   Passed  1434.14 sec
     set_tests_properties(${name} PROPERTIES TIMEOUT 3000)
+    set_target_properties(${name} PROPERTIES CXX_STANDARD 20)
 endfunction()
 
 
@@ -25,6 +26,9 @@ addRapidgzipTest(testPrecodeCheck)
 addRapidgzipTest(testCompressedVector)
 addRapidgzipTest(testCRC32)
 addRapidgzipTest(testInflateWrapper)
+
+addRapidgzipTest(testLZ4)
+target_link_libraries(testLZ4 PRIVATE lz4)
 
 addRapidgzipTest(testDecodedData)
 target_compile_features(testDecodedData INTERFACE cxx_std_20)  # for aggregate initialization

@@ -54,6 +54,7 @@ withCxxopts = getDependencyOption('CXXOPTS')
 withIsal = getDependencyOption('ISAL')
 withRpmalloc = getDependencyOption('RPMALLOC')
 withZlib = getDependencyOption('ZLIB')
+withLZ4 = getDependencyOption('LZ4')
 
 if withCxxopts == 'disable':
     print("[Warning] Cxxopts can not be disabled! Will enable it.")
@@ -194,6 +195,11 @@ for sources_architecture, sources in isal_sources_by_architecture.items():
         isal_sources += sources
 isal_sources = ['src/external/isa-l/' + source for source in set(isal_sources)] if withIsal == 'enable' else []
 
+rpmalloc_sources = ['src/external/rpmalloc/rpmalloc/rpmalloc.c'] if withRpmalloc == 'enable' else []
+
+lz4_files = ['lz4.c', 'lz4file.c', 'lz4frame.c', 'lz4hc.c', 'xxhash.c']
+lz4_sources = ['src/external/lz4/lib/' + name for name in lz4_files] if withLZ4 == 'enable' else []
+
 include_dirs = ['src']
 isal_includes = ['src/external/isa-l/include', 'src/external/isa-l/igzip', 'src/external/isa-l']
 if withIsal == 'enable':
@@ -204,14 +210,14 @@ if withRpmalloc == 'enable':
     include_dirs += ['src/external/rpmalloc/rpmalloc']
 if withCxxopts == 'enable':
     include_dirs += ['src/external/cxxopts/include']
-
-rpmalloc_sources = ['src/external/rpmalloc/rpmalloc/rpmalloc.c'] if withRpmalloc == 'enable' else []
+if withLZ4 == 'enable':
+    include_dirs += ['src/external/lz4/lib']
 
 extensions = [
     Extension(
         # fmt: off
         name         = 'rapidgzip',
-        sources      = ['rapidgzip.pyx'] + zlib_sources + isal_sources + rpmalloc_sources,
+        sources      = zlib_sources + isal_sources + rpmalloc_sources + lz4_sources + ['rapidgzip.pyx'],
         include_dirs = include_dirs,
         language     = 'c++',
         # fmt: on
