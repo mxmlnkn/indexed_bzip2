@@ -29,13 +29,6 @@
 
 namespace rapidgzip
 {
-struct NewlineOffset
-{
-    uint64_t lineOffset{ 0 };
-    uint64_t uncompressedOffsetInBytes{ 0 };
-};
-
-
 template<typename T_FetchingStrategy,
          typename T_ChunkData = ChunkData>
 class GzipChunkFetcher final :
@@ -53,7 +46,6 @@ public:
     using BlockFinder = typename BaseType::BlockFinder;
     using PostProcessingFutures = std::map</* block offset */ size_t, std::future<void> >;
     using UniqueSharedFileReader = std::unique_ptr<SharedFileReader>;
-    using SharedNewlineOffsets = std::shared_ptr<std::vector<NewlineOffset> >;
 
     static constexpr bool REPLACE_MARKERS_IN_PARALLEL = true;
 
@@ -83,14 +75,12 @@ public:
                       std::shared_ptr<BlockFinder> blockFinder,
                       std::shared_ptr<BlockMap>    blockMap,
                       std::shared_ptr<WindowMap>   windowMap,
-                      SharedNewlineOffsets         newlineOffsets,
                       size_t                       parallelization ) :
         BaseType( blockFinder, parallelization ),
         m_sharedFileReader( std::move( sharedFileReader ) ),
         m_blockFinder( std::move( blockFinder ) ),
         m_blockMap( std::move( blockMap ) ),
         m_windowMap( std::move( windowMap ) ),
-        m_newlineOffsets( std::move( newlineOffsets ) ),
         m_isBgzfFile( m_blockFinder->fileType() == FileType::BGZF )
     {
         if ( !m_sharedFileReader ) {
@@ -209,7 +199,6 @@ public:
                                                     ? toString( *m_windowCompressionType )
                                                     : std::string( "Default" ) ) << "\n";
             out << "    Window sparsity    : " << m_windowSparsity << "\n";
-            out << "    Count newlines     : " << m_countNewlines << "\n";
 
             std::cerr << std::move( out ).str();
         }
@@ -266,12 +255,6 @@ public:
     {
         m_windowCompressionType = windowCompressionType;
         m_windowSparsity = useSparseWindows;
-    }
-
-    void
-    setCountNewlines( bool countNewlines )
-    {
-        m_countNewlines = countNewlines;
     }
 
 private:
@@ -390,9 +373,9 @@ private:
                               const std::vector<typename ChunkData::Subchunk>& subchunks,
                               const FasterVector<uint8_t>&                     lastWindow )
     {
-        for ( const auto& subchunk : subchunks ) {
-            m_blockMap->push( subchunk.encodedOffset, subchunk.encodedSize, subchunk.decodedSize );
-            m_blockFinder->insert( subchunk.encodedOffset + subchunk.encodedSize );
+        for ( const auto& boundary : subchunks ) {
+            m_blockMap->push( boundary.encodedOffset, boundary.encodedSize, boundary.decodedSize );
+            m_blockFinder->insert( boundary.encodedOffset + boundary.encodedSize );
         }
 
         if ( subchunks.size() > 1 ) {
@@ -404,10 +387,10 @@ private:
             const auto lookupKey = !BaseType::test( chunkOffset ) && BaseType::test( partitionOffset )
                                    ? partitionOffset
                                    : chunkOffset;
-            for ( const auto& subchunk : subchunks ) {
+            for ( const auto& boundary : subchunks ) {
                 /* This condition could be removed but makes the map slightly smaller. */
-                if ( subchunk.encodedOffset != chunkOffset ) {
-                    m_unsplitBlocks.emplace( subchunk.encodedOffset, lookupKey );
+                if ( boundary.encodedOffset != chunkOffset ) {
+                    m_unsplitBlocks.emplace( boundary.encodedOffset, lookupKey );
                 }
             }
         }
@@ -472,33 +455,6 @@ private:
                     std::cerr << std::move( message ).str();
                 #endif
                 }
-            }
-
-            if ( subchunk.newlineCount ) {
-                const auto blockInfo = m_blockMap->getEncodedOffset( subchunk.encodedOffset );
-                if ( !blockInfo ) {
-                    std::stringstream message;
-                    message << "Failed to find subchunk offset: " << formatBits( subchunk.encodedOffset )
-                            << "even though it should have been inserted at the top of this method!";
-                    throw std::logic_error( std::move( message ).str() );
-                }
-
-                if ( m_newlineOffsets->empty() ) {
-                    m_newlineOffsets->emplace_back( NewlineOffset{ 0, 0 } );
-                }
-
-                const auto& lastLineCount = m_newlineOffsets->back();
-                if ( lastLineCount.uncompressedOffsetInBytes != blockInfo->decodedOffsetInBytes ) {
-                    std::stringstream message;
-                    message << "Did not find line count for preceding decompressed offset: "
-                            << formatBytes( blockInfo->decodedOffsetInBytes );
-                    throw std::logic_error( std::move( message ).str() );
-                }
-
-                m_newlineOffsets->emplace_back( NewlineOffset{
-                    lastLineCount.lineOffset + *subchunk.newlineCount,
-                    blockInfo->decodedOffsetInBytes + subchunk.decodedSize
-                } );
             }
         }
 
@@ -742,7 +698,6 @@ private:
         chunkDataConfiguration.splitChunkSize = m_blockFinder->spacingInBits() / 8U;
         chunkDataConfiguration.windowCompressionType = m_windowCompressionType;
         chunkDataConfiguration.windowSparsity = m_windowSparsity;
-        chunkDataConfiguration.countNewlines = m_countNewlines;
 
         /* If we are a BGZF file and we have not imported an index, then we can assume the
          * window to be empty because we should only get offsets at gzip stream starts.
@@ -808,7 +763,6 @@ private:
     std::shared_ptr<BlockFinder> const m_blockFinder;
     std::shared_ptr<BlockMap> const m_blockMap;
     std::shared_ptr<WindowMap> const m_windowMap;
-    std::shared_ptr<std::vector<NewlineOffset> > const m_newlineOffsets;
 
     const bool m_isBgzfFile;
     std::atomic<size_t> m_maxDecompressedChunkSize{ std::numeric_limits<size_t>::max() };
@@ -823,6 +777,5 @@ private:
     PostProcessingFutures m_markersBeingReplaced;
     std::optional<CompressionType> m_windowCompressionType;
     bool m_windowSparsity{ true };
-    bool m_countNewlines{ false };
 };
 }  // namespace rapidgzip
