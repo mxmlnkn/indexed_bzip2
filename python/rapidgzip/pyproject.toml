@@ -4,4 +4,4 @@
 # Use setuptools >= 43 because it automatically includes pyproject.toml in source distribution
 # Use setuptools >= 46.5 to use attr: package.__version__
 # https://setuptools.readthedocs.io/en/latest/history.html#id284
-requires = ["setuptools >= 46.4.0, < 70", "wheel", "cython >= 0.29.24"]
+requires = ["setuptools >= 46.4.0, < 72", "wheel", "cython >= 0.29.24"]
