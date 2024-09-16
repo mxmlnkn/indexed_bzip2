@@ -3,5 +3,53 @@
 [build-system]
 # Use setuptools >= 43 because it automatically includes pyproject.toml in source distribution
 # Use setuptools >= 46.5 to use attr: package.__version__
+# Use setuptools >= 61 for pyproject.toml support
 # https://setuptools.readthedocs.io/en/latest/history.html#id284
-requires = ["setuptools >= 46.4.0, < 72", "wheel", "cython >= 0.29.24"]
+requires = ["setuptools >= 61.2, < 72", "wheel", "cython >= 0.29.24"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rapidgzip"
+version = "0.14.2"
+description = "Parallel random access to gzip files"
+authors = [{name = "Maximilian Knespel", email = "mxmlnkn@github.de"}]
+license = {text = "MIT"}
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
+    "Development Status :: 3 - Alpha",
+    "Natural Language :: English",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Archiving",
+    "Topic :: System :: Archiving :: Compression",
+]
+urls = {Homepage = "https://github.com/mxmlnkn/rapidgzip"}
+requires-python = ">= 3.6"
+
+[project.readme]
+file = "README.md"
+content-type = "text/markdown"
+
+[project.scripts]
+rapidgzip = "rapidgzip:cli"
+
+[tool.setuptools]
+py-modules = ["rapidgzip"]
+license-files = [
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+]
