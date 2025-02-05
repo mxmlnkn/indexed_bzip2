@@ -26,6 +26,9 @@
 #include <ThreadPool.hpp>
 
 
+using namespace rapidgzip;
+
+
 namespace
 {
 /**
@@ -165,7 +168,7 @@ findNonCompressedFalsePositives()
     const auto countFalsePositives =
         [] () {
             const auto randomData = createRandomData<char>( testDataSize );
-            rapidgzip::BitReader bitReader( std::make_unique<BufferViewFileReader>( randomData ) );
+            gzip::BitReader bitReader( std::make_unique<BufferViewFileReader>( randomData ) );
             const auto bitReaderSize = bitReader.size().value();
 
             size_t matches{ 0 };
@@ -197,7 +200,7 @@ findNonCompressedFalsePositives()
 void
 findDynamicBitTripletFalsePositives()
 {
-    using BitReader64 = BitReader<false, uint64_t>;
+    using gzip::BitReader = BitReader<false, uint64_t>;
     constexpr size_t nRepetitions = 3;
     constexpr auto LUT = NEXT_DYNAMIC_HEADER_LUT<12>;
     constexpr size_t randomDataSize = 8_Mi;
@@ -205,7 +208,7 @@ findDynamicBitTripletFalsePositives()
     Statistics<double> statistics;
     for ( size_t i = 0; i < nRepetitions; ++i ) {
         const auto randomData = createRandomData<char>( randomDataSize );
-        BitReader64 bitReader( std::make_unique<BufferViewFileReader>( randomData ) );
+        gzip::BitReader bitReader( std::make_unique<BufferViewFileReader>( randomData ) );
 
         //std::cerr << "Bit reader: position: " << bitReader.tell() << ", size: " << bitReader.size() << "\n";
         //std::cerr << "First match: " << (int) LUT[bitReader.peek<12>()] << "\n";
@@ -221,7 +224,7 @@ findDynamicBitTripletFalsePositives()
                     bitReader.seekAfterPeek( nextPosition );
                 }
             }
-        } catch ( const BitReader64::EndOfFileReached& ) {
+        } catch ( const gzip::BitReader::EndOfFileReached& ) {
             // EOF reached
         }
 
@@ -344,7 +347,7 @@ void
 AnalyzeDynamicBlockFalsePositives::countFalsePositives( const std::vector<char>& data,
                                                         size_t                   nBitsToTest )
 {
-    rapidgzip::BitReader bitReader( std::make_unique<BufferViewFileReader>( data ) );
+    gzip::BitReader bitReader( std::make_unique<BufferViewFileReader>( data ) );
 
     static constexpr auto CACHED_BIT_COUNT = 14;
 
@@ -387,7 +390,7 @@ AnalyzeDynamicBlockFalsePositives::countFalsePositives( const std::vector<char>&
             const auto next57Bits = bitReader.peek( rapidgzip::deflate::MAX_PRECODE_COUNT
                                                     * rapidgzip::deflate::PRECODE_BITS );
             static_assert( rapidgzip::deflate::MAX_PRECODE_COUNT * rapidgzip::deflate::PRECODE_BITS
-                           <= rapidgzip::BitReader::MAX_BIT_BUFFER_SIZE,
+                           <= gzip::BitReader::MAX_BIT_BUFFER_SIZE,
                            "This optimization requires a larger BitBuffer inside BitReader!" );
             /* Do not use a LUT because it cannot return specific errors. */
             using rapidgzip::PrecodeCheck::WithoutLUT::checkPrecode;
@@ -489,7 +492,7 @@ AnalyzeDynamicBlockFalsePositives::countFalsePositives( const std::vector<char>&
             }
 
             ++foundOffsets;
-        } catch ( const rapidgzip::BitReader::EndOfFileReached& ) {
+        } catch ( const gzip::BitReader::EndOfFileReached& ) {
             throw std::logic_error( "EOF reached. Trailing buffer calculation must be wrong!" );
             break;
         }
