@@ -2,7 +2,7 @@ name: Build (and Publish) Wheels for rapidgzip
 
 on:
   push:
-    branches: 'master'
+    branches: '*'
     tags: 'rapidgzip-v*.*.*'
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       run: twine check python/rapidgzip/dist/*
 
     - name: Publish Tarball to PyPI
-      if: startsWith(github.ref, 'refs/tags/')
+      #if: startsWith(github.ref, 'refs/tags/')
       env:
         TWINE_PASSWORD: ${{ secrets.TWINE_PASSWORD_RAPIDGZIP }}
       working-directory: python/rapidgzip
@@ -43,6 +43,7 @@ jobs:
         path: "python/rapidgzip/dist/*.tar.gz"
 
   Wheels:
+    if: false
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -173,7 +174,7 @@ jobs:
       run: twine upload --skip-existing -u __token__ dist/*
 
   Deploy-AUR:
-    if: startsWith(github.ref, 'refs/tags/')
+    #if: startsWith(github.ref, 'refs/tags/')
     needs: Tarball
     runs-on: ubuntu-latest
     container:
