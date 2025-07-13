@@ -328,6 +328,39 @@ testTwoStagedDecoding( const std::string& encodedFilePath,
     block.setInitialWindow( { lastWindow.data(), lastWindow.size() } );
 }
 
+void
+testSeekingWithIndex( const std::string& encodedFilePath,
+                      const std::string& gzipIndexPath,
+                      const std::string& decodedFilePath )
+{
+    GzipReader gzipReader{ std::make_unique<StandardFileReader>( encodedFilePath ) };
+    gzipReader.importIndex( std::make_unique<StandardFileReader>( gzipIndexPath ) );
+    StandardFileReader decodedFileReader{ decodedFilePath };
+
+    /* Seek forward */
+    gzipReader.seek( 128_Ki );
+    std::vector<char> decompressed( 1_Mi );
+    auto decompressedSize = gzipReader.read( decompressed.data(), decompressed.size() );
+    decompressed.resize( decompressedSize );
+
+    decodedFileReader.seek( 128_Ki );
+    std::vector<char> decoded( 1_Mi );
+    auto decodedSize = decodedFileReader.read( decoded.data(), decoded.size() );
+    decoded.resize( decodedSize );
+    REQUIRE_EQUAL( decompressed, decoded );
+
+    /* Seek backward */
+    gzipReader.seek( 64_Ki );
+    decompressed.resize( 1_Mi );
+    decompressedSize = gzipReader.read( decompressed.data(), decompressed.size() );
+    decompressed.resize( decompressedSize );
+
+    decodedFileReader.seek( 64_Ki );
+    decoded.resize( 1_Mi );
+    decodedSize = decodedFileReader.read( decoded.data(), decoded.size() );
+    decoded.resize( decodedSize );
+    REQUIRE_EQUAL( decompressed, decoded );
+}
 
 int
 main( int    argc,
@@ -388,6 +421,13 @@ main( int    argc,
         }
 
         testTwoStagedDecoding( encodedFilePath.string(), decodedFilePath.string() );
+
+        const auto gzipIndexPath = entry.path().string() + ".index";
+        if ( !std::filesystem::exists( gzipIndexPath ) ) {
+            continue;
+        }
+
+        testSeekingWithIndex( encodedFilePath, gzipIndexPath, decodedFilePath );
     }
 
     std::cout << "Tests successful: " << ( gnTests - gnTestErrors ) << " / " << gnTests << "\n";

@@ -7,10 +7,11 @@
 #include <memory>
 #include <optional>
 #include <sstream>
-#include <string>
 #include <stdexcept>
 #include <utility>
 
+#include <AffinityHelpers.hpp>
+#include <BlockMap.hpp>
 #include <DecodedDataView.hpp>
 #include <FileUtils.hpp>
 #include <filereader/FileReader.hpp>
@@ -20,6 +21,8 @@
 #include <gzip/deflate.hpp>
 #include <gzip/format.hpp>
 #include <gzip/gzip.hpp>
+#include <IndexFileFormat.hpp>
+#include <WindowMap.hpp>
 
 #ifdef WITH_PYTHON_SUPPORT
     #include <filereader/Python.hpp>
@@ -81,7 +84,7 @@ public:
     [[nodiscard]] bool
     seekable() const final
     {
-        return m_bitReader.seekable();
+        return m_blockMap && m_blockMap->finalized() && m_bitReader.seekable();
     }
 
     void
@@ -121,14 +124,62 @@ public:
             return m_currentPosition;
         }
 
+        if ( m_blockMap && m_blockMap->finalized() ) {
+            return m_blockMap->back().second;
+        }
+
         throw std::invalid_argument( "Can't get stream size when not finished reading at least once!" );
     }
 
     size_t
-    seek( long long int /* offset */,
-          int           /* origin */ = SEEK_SET ) final
+    seek( long long int offset,
+          int           origin = SEEK_SET ) final
     {
-        throw std::logic_error( "Not implemented (yet)!" );
+        if ( closed() ) {
+            throw std::invalid_argument( "You may not call seek on closed GzipReader!" );
+        }
+
+        if ( !seekable() ) {
+            throw std::invalid_argument( "Cannot seek with non-seekable input!" );
+        }
+
+        if ( !m_blockMap ) {
+            throw std::invalid_argument( "BlockMap is empty while seeking in GzipRader!" );
+        }
+
+        const auto positiveOffset = effectiveOffset( offset, origin );
+
+        if ( positiveOffset == tell() ) {
+            /* This extra check is necessary for empty files! */
+            m_atEndOfFile = m_currentPosition >= m_blockMap->back().second;
+            return positiveOffset;
+        }
+
+        if ( !m_currentDeflateBlock.has_value() ) {
+            readHeader();
+        }
+
+        const auto blockInfo = m_blockMap->findDataOffset( positiveOffset );
+        if ( !blockInfo.contains( positiveOffset ) ) {
+            throw std::logic_error( "BlockMap returned unwanted block!" );
+        }
+
+        const auto window = m_windowMap->get( blockInfo.encodedOffsetInBits );
+        if ( window ) {
+            auto decompressed = window->decompress();
+            m_currentDeflateBlock->reset( *decompressed );
+        } else {
+            m_currentDeflateBlock->reset();
+        }
+
+        m_atEndOfFile = false;
+        m_currentPosition = blockInfo.decodedOffsetInBytes;
+        m_bitReader.seekTo( blockInfo.encodedOffsetInBits );
+        readBlockHeader();
+        m_didReadGzipHeader = false;
+        read( -1, nullptr, positiveOffset - m_currentPosition );
+        return m_currentPosition;
+
     }
 
     void
@@ -292,6 +343,13 @@ public:
         m_crc32Calculator.setEnabled( enabled );
     }
 
+    void
+    importIndex( UniqueFileReader&& indexFile, size_t parallelization = 0 )
+    {
+        setBlockOffsets( readGzipIndex( std::move( indexFile ), m_fileReader->clone(),
+                                        parallelization == 0 ? availableCores() : parallelization ) );
+    }
+
 private:
     /**
      * @note Only to be used by readBlock!
@@ -373,6 +431,7 @@ private:
         m_streamBytesCount = 0;
         m_currentPoint = StoppingPoint::END_OF_STREAM_HEADER;
         m_crc32Calculator.reset();
+        m_didReadGzipHeader = true;
     }
 
     void
@@ -389,6 +448,72 @@ private:
     {
         return !m_currentDeflateBlock.has_value() || !m_currentDeflateBlock->isValid()
                || ( bufferHasBeenFlushed() && m_currentDeflateBlock->eos() );
+    }
+
+    void
+    setBlockOffsets( const GzipIndex& index )
+    {
+        if ( index.checkpoints.empty() || !index.windows ) {
+            return;
+        }
+
+        const auto lockedWindows = index.windows->data();
+        if ( lockedWindows.second == nullptr ) {
+            throw std::invalid_argument( "Index window map must be a valid pointer!" );
+        }
+
+        const auto lessOffset =
+            [] ( const auto& a, const auto& b ) {
+                return a.uncompressedOffsetInBytes < b.uncompressedOffsetInBytes;
+            };
+        if ( !std::is_sorted( index.checkpoints.begin(), index.checkpoints.end(), lessOffset ) ) {
+            throw std::invalid_argument( "Index checkpoints must be sorted by uncompressed offsets!" );
+        }
+
+        if ( index.hasLineOffsets ) {
+            throw std::invalid_argument( "Index with line offsets is not supported!" );
+        }
+
+        /* Generate simple compressed to uncompressed offset map from index. */
+        std::map<size_t, size_t> newBlockOffsets;
+        m_windowMap = std::make_shared<WindowMap>();
+        for ( const auto& checkpoint: index.checkpoints ) {
+            newBlockOffsets.emplace( checkpoint.compressedOffsetInBits, checkpoint.uncompressedOffsetInBytes );
+            if ( const auto window = lockedWindows.second->find( checkpoint.compressedOffsetInBits );
+                 window != lockedWindows.second->end() )
+            {
+                m_windowMap->emplaceShared( checkpoint.compressedOffsetInBits, window->second );
+            }
+        }
+
+        /* Input file-end offset if not included in checkpoints. */
+        if ( const auto fileEndOffset = newBlockOffsets.find( index.compressedSizeInBytes * 8 );
+             fileEndOffset == newBlockOffsets.end() )
+        {
+            newBlockOffsets.emplace( index.compressedSizeInBytes * 8, index.uncompressedSizeInBytes );
+            m_windowMap->emplace( index.compressedSizeInBytes * 8, {}, CompressionType::NONE );
+        } else if ( fileEndOffset->second != index.uncompressedSizeInBytes ) {
+            throw std::invalid_argument( "Index has contradicting information for the file end information!" );
+        }
+
+        setBlockOffsets( newBlockOffsets );
+    }
+
+    void
+    setBlockOffsets( const std::map<size_t, size_t>& offsets )
+    {
+        if ( offsets.empty() ) {
+            if ( !m_blockMap || m_blockMap->dataBlockCount() == 0 ) {
+                return;
+            }
+            throw std::invalid_argument( "May not clear offsets. Construct a new ParallelGzipReader instead!" );
+        }
+
+        if ( offsets.size() < 2 ) {
+            throw std::invalid_argument( "Block offset map must contain at least one valid block and one EOS block!" );
+        }
+        m_blockMap = std::make_shared<BlockMap>();
+        m_blockMap->setBlockOffsets( offsets );
     }
 
 private:
@@ -425,6 +550,10 @@ private:
     std::optional<size_t> m_offsetInLastBuffers;
 
     CRC32Calculator m_crc32Calculator;
+
+    std::shared_ptr<BlockMap> m_blockMap;
+    std::shared_ptr<WindowMap> m_windowMap;
+    bool m_didReadGzipHeader{ false };
 };
 
 
@@ -542,7 +671,7 @@ GzipReader::readFooter()
     {
         const auto footer = gzip::readFooter( m_bitReader );
 
-        if ( static_cast<uint32_t>( m_streamBytesCount ) != footer.uncompressedSize ) {
+        if ( m_didReadGzipHeader && static_cast<uint32_t>( m_streamBytesCount ) != footer.uncompressedSize ) {
             std::stringstream message;
             message << "Mismatching size (" << static_cast<uint32_t>( m_streamBytesCount ) << " <-> footer: "
                     << footer.uncompressedSize << ") for gzip stream!";
@@ -554,7 +683,9 @@ GzipReader::readFooter()
             throw std::logic_error( "Call readHeader and readBlockHeader before readFooter!" );
         }
 
-        m_crc32Calculator.verify( footer.crc32 );
+        if ( m_didReadGzipHeader ) {
+            m_crc32Calculator.verify( footer.crc32 );
+        }
         break;
     }
     case FileType::ZLIB:
@@ -592,5 +723,6 @@ GzipReader::readFooter()
     }
 
     m_currentPoint = StoppingPoint::END_OF_STREAM;
+    m_didReadGzipHeader = false;
 }
 }  // namespace rapidgzip
