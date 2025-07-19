@@ -352,6 +352,26 @@ readFile( const std::filesystem::path& filePath )
 #endif
 
 
+
+inline size_t
+fileSize( const int fileDescriptor )
+{
+#if defined(_MSC_VER)
+    /* On Windows, fstat STILL (2025!) cannot handle files > 4 GiB! */
+    struct _stat64 fileStats{};
+    const auto result = _fstat64( fileDescriptor, &fileStats );
+#else
+    struct stat fileStats{};
+    const auto result = fstat( fileDescriptor, &fileStats );
+#endif
+
+    if ( result == -1 ) {
+        std::cerr << "Error: " << errno << " -> " << std::strerror( errno ) << "\n";
+    }
+    return fileStats.st_size;
+}
+
+
 #if defined( HAVE_VMSPLICE )
 
 /**
