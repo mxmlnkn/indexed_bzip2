@@ -8,7 +8,12 @@ target_link_libraries(bitpatternstats PRIVATE cxxopts indexed_bzip2_parallel)
 
 add_executable(rapidgzip)
 target_sources(rapidgzip PRIVATE ${CMAKE_CURRENT_LIST_DIR}/rapidgzip.cpp)
-target_link_libraries(rapidgzip PRIVATE cxxopts librapidgzip rpmalloc)
+if(WITH_RPMALLOC)
+    target_link_libraries(rapidgzip PRIVATE cxxopts librapidgzip rpmalloc)
+else()
+    target_link_libraries(rapidgzip PRIVATE cxxopts librapidgzip)
+endif()
+
 if(WITH_RPMALLOC)
     target_compile_definitions(rapidgzip PRIVATE WITH_RPMALLOC)
 endif()
