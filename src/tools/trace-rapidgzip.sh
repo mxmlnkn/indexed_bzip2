@@ -72,7 +72,7 @@ function buildWithScoreP()
             -isystem ../src/external/cxxopts/include \
             -march=native -O3 -DNDEBUG \
             -Wall -Wextra -Wshadow -Wunused -Werror=return-type -Wno-attributes -Wsuggest-override \
-            -DWITH_RPMALLOC -DWITH_ISAL \
+            -DIBZIP2_WITH_RPMALLOC -DIBZIP2_WITH_ISAL \
             -fconstexpr-ops-limit=99000100 \
             -o rapidgzip.cpp.scorep.o \
             -c ../src/tools/rapidgzip.cpp

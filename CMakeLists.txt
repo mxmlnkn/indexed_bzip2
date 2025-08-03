@@ -3,15 +3,17 @@ cmake_minimum_required(VERSION 3.17)
 
 project("Indexed BZip2/Gzip Decoder" CXX)
 
-option(CODE_COVERAGE "Enable coverage reporting" OFF)
-option(USE_SYSTEM_ZLIB "Use the system-installed zlib library instead of compiling it from source" OFF)
-option(WITH_RPMALLOC "Compile with rpmalloc for faster memory allocations" ON)
-option(WITH_ISAL "Compile with ISA-l for more than twice as fast decompression than zlib" ON)
-option(RUN_CLANG_TIDY "Runs clang-tidy while building targets" OFF)
+option(IBZIP2_BUILD_TESTING "Build tests and benchmarks" ON)
+option(IBZIP2_BUILD_TOOLS "Build tools" ON)
+option(IBZIP2_CODE_COVERAGE "Enable coverage reporting" OFF)
+option(IBZIP2_USE_SYSTEM_ZLIB "Use the system-installed zlib library instead of compiling it from source" OFF)
+option(IBZIP2_WITH_RPMALLOC "Compile with rpmalloc for faster memory allocations" ON)
+option(IBZIP2_WITH_ISAL "Compile with ISA-l for more than twice as fast decompression than zlib" ON)
+option(IBZIP2_RUN_CLANG_TIDY "Runs clang-tidy while building targets" OFF)
 
 if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "riscv64")
-    set(WITH_ISAL OFF)
-    set(WITH_RPMALLOC OFF)
+    set(IBZIP2_WITH_ISAL OFF)
+    set(IBZIP2_WITH_RPMALLOC OFF)
 endif()
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "" FORCE)
@@ -32,7 +34,7 @@ add_compile_options(
     # The default limit is ~33 M (1<<25) and 99 M seem to be enough currently to compile.
     "$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fconstexpr-ops-limit=199000100>"
     "$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang>:-fconstexpr-steps=199000100>"
-    "$<$<AND:$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>,$<BOOL:${CODE_COVERAGE}>>:-O0;-g;--coverage>"
+    "$<$<AND:$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>,$<BOOL:${IBZIP2_CODE_COVERAGE}>>:-O0;-g;--coverage>"
     # Add some hardening. See e.g.:
     # https://www.phoronix.com/news/GCC-fhardened-Hardening-Option
     # https://developers.redhat.com/blog/2018/03/21/compiler-and-linker-flags-gcc
@@ -49,12 +51,12 @@ if(NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm" AND NOT ${CMAKE_SYSTEM_PROCESSOR}
 endif()
 
 add_link_options(
-    "$<$<AND:$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>,$<BOOL:${CODE_COVERAGE}>>:--coverage>"
+    "$<$<AND:$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>,$<BOOL:${IBZIP2_CODE_COVERAGE}>>:--coverage>"
     # See the note about hardening inside add_compile_options.
     "$<$<AND:$<COMPILE_LANG_AND_ID:CXX,Clang,GNU>,$<NOT:$<PLATFORM_ID:Windows>>>:-Wl,-pie,-z,relro,-z,now,-z,defs>"
 )
 
-if(CODE_COVERAGE)
+if(IBZIP2_CODE_COVERAGE)
     add_definitions(-DSHORT_TESTS -D_FORTIFY_SOURCE=2 -D_GLIBCXX_ASSERTIONS)
 endif()
 
@@ -63,7 +65,7 @@ endif()
 # to find a test file in the build directory root.
 include(CTest)
 
-if(USE_SYSTEM_ZLIB)
+if(IBZIP2_USE_SYSTEM_ZLIB)
     set(OLD_CMAKE_FIND_LIBRARY_SUFFIXES "${CMAKE_FIND_LIBRARY_SUFFIXES}")
     set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
     find_package(ZLIB REQUIRED)

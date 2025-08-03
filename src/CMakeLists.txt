@@ -50,7 +50,7 @@ endif()
 
 #add_subdirectory(external/zlib)
 
-if(NOT USE_SYSTEM_ZLIB)
+if(NOT IBZIP2_USE_SYSTEM_ZLIB)
     project(zlibstatic C)
     add_library(zlibstatic STATIC)
     set(ZLIB_HOME "${CMAKE_CURRENT_SOURCE_DIR}/external/zlib")
@@ -82,7 +82,7 @@ endif()
 
 # ISA-l
 
-if(WITH_ISAL)
+if(IBZIP2_WITH_ISAL)
     project(isal_inflate LANGUAGES C)
 
     set(ISAL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/external/isa-l")
@@ -234,4 +234,4 @@ if(WITH_ISAL)
             ${ISAL_HOME}
             ${ISAL_HOME}/igzip
     )
-endif(WITH_ISAL)
+endif(IBZIP2_WITH_ISAL)

@@ -31,7 +31,7 @@
 //#define WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER
 //#define WITH_MULTI_CACHED_HUFFMAN_DECODER
 
-#ifdef WITH_ISAL
+#ifdef IBZIP2_WITH_ISAL
     //#include <huffman/HuffmanCodingDistanceISAL.hpp>
     #include <huffman/HuffmanCodingISAL.hpp>
 #elif defined( WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER )
@@ -171,7 +171,7 @@ namespace rapidgzip::deflate
  * threads, probably because the LUT becomes too large for the caches when two hardware threads use
  * the same core.
  */
-#ifdef WITH_ISAL
+#ifdef IBZIP2_WITH_ISAL
 using LiteralOrLengthHuffmanCoding = HuffmanCodingISAL;
 #elif defined( WITH_DEFLATE_SPECIFIC_HUFFMAN_DECODER )
 using LiteralOrLengthHuffmanCoding = HuffmanCodingShortBitsCachedDeflate</* LUT_BITS_COUNT */ 11>;
@@ -733,7 +733,6 @@ private:
                             Window&              window,
                             const HuffmanCoding& coding );
 
-#if defined( WITH_ISAL ) || defined( WITH_MULTI_CACHED_HUFFMAN_DECODER )
     template<typename Window>
     [[nodiscard]] std::pair<size_t, Error>
     readInternalCompressedMultiCached( gzip::BitReader&                    bitReader,
@@ -839,7 +838,7 @@ private:
      *
      * And benchmark with:
      * @verbatim
-     * cmake -DWITH_ISAL=OFF .. && cmake --build -- rapidgzip
+     * cmake -DIBZIP2_WITH_ISAL=OFF .. && cmake --build -- rapidgzip
      * for (( i=0; i < 5; ++i )); do
      *     src/tools/rapidgzip -v -d -o /dev/null 1M-24B-fixed-huffman-streams.gz 2>&1 | grep "Decompressed"
      * done
@@ -1448,7 +1447,7 @@ Block<ENABLE_STATISTICS>::readInternal( gzip::BitReader& bitReader,
     #endif
     }
 
-#ifdef WITH_ISAL
+#ifdef IBZIP2_WITH_ISAL
     if constexpr ( std::is_same_v<LiteralOrLengthHuffmanCoding, HuffmanCodingISAL> ) {
         return readInternalCompressedMultiCached( bitReader, nMaxToDecode, window, m_literalHC );
     } else {
@@ -1582,7 +1581,7 @@ Block<ENABLE_STATISTICS>::readInternalCompressed( gzip::BitReader&     bitReader
 }
 
 
-#if defined( WITH_ISAL ) || defined( WITH_MULTI_CACHED_HUFFMAN_DECODER )
+#if defined( IBZIP2_WITH_ISAL ) || defined( WITH_MULTI_CACHED_HUFFMAN_DECODER )
 template<bool ENABLE_STATISTICS>
 template<typename Window>
 std::pair<size_t, Error>
@@ -1734,7 +1733,7 @@ Block<ENABLE_STATISTICS>::readInternalCompressedSpecialized
     m_decodedBytes += nBytesRead;
     return { nBytesRead, Error::NONE };
 }
-#endif  // ifdef WITH_ISAL
+#endif  // ifdef IBZIP2_WITH_ISAL
 
 
 template<bool ENABLE_STATISTICS>

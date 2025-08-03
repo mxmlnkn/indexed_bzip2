@@ -7,7 +7,6 @@
 #include <stdexcept>
 #include <utility>
 
-#ifdef WITH_ISAL
     #include <crc.h>
 #endif
 
@@ -123,7 +122,7 @@ updateCRC32( const uint32_t    crc,
              const char* const buffer,
              const size_t      size )
 {
-#ifdef WITH_ISAL
+#ifdef IBZIP2_WITH_ISAL
     return ~crc32_gzip_refl( ~crc, reinterpret_cast<const uint8_t*>( buffer ), size );
 #else
     return crc32SliceByN<SLICE_SIZE>( crc, buffer, size );
