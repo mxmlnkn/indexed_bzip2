@@ -15,14 +15,19 @@ add_library(cxxopts INTERFACE)
 target_include_directories(cxxopts SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/external/cxxopts/include)
 target_sources(cxxopts INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/external/cxxopts/include/cxxopts.hpp)
 
+if (IBZIP2_BUILD_TESTING)
+    add_subdirectory(benchmarks)
+endif()
 
-add_subdirectory(benchmarks)
 add_subdirectory(core)
 add_subdirectory(huffman)
 add_subdirectory(indexed_bzip2)
 add_subdirectory(rapidgzip)
 add_subdirectory(tools)
-add_subdirectory(tests)
+
+if (IBZIP2_BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 
 # rpmalloc

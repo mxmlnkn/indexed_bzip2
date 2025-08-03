@@ -733,6 +733,7 @@ private:
                             Window&              window,
                             const HuffmanCoding& coding );
 
+#if defined( IBZIP2_WITH_ISAL ) || defined( WITH_MULTI_CACHED_HUFFMAN_DECODER )
     template<typename Window>
     [[nodiscard]] std::pair<size_t, Error>
     readInternalCompressedMultiCached( gzip::BitReader&                    bitReader,

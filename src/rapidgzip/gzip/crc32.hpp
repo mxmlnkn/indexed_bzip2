@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
+#ifdef IBZIP2_WITH_ISAL
     #include <crc.h>
 #endif
 

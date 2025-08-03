@@ -63,7 +63,9 @@ endif()
 
 # This command should be in the source directory root because ctest expects
 # to find a test file in the build directory root.
-include(CTest)
+if (IBZIP2_BUILD_TESTING)
+    include(CTest)
+endif()
 
 if(IBZIP2_USE_SYSTEM_ZLIB)
     set(OLD_CMAKE_FIND_LIBRARY_SUFFIXES "${CMAKE_FIND_LIBRARY_SUFFIXES}")
@@ -105,19 +107,21 @@ add_subdirectory(src)
 
 # Add convenience custom targets
 
-include(ProcessorCount)
-ProcessorCount(coreCount)
+if (IBZIP2_BUILD_TESTING)
+    include(ProcessorCount)
+    ProcessorCount(coreCount)
 
-add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} -j ${coreCount} --extra-verbose)
+    add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} -j ${coreCount} --extra-verbose)
 
-add_custom_target(check-memcheck
-    COMMAND ${CMAKE_CTEST_COMMAND} -j ${coreCount} --extra-verbose --force-new-ctest-process --test-action memcheck
-    COMMAND cat "${CMAKE_BINARY_DIR}/Testing/Temporary/MemoryChecker.*.log"
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-)
+    add_custom_target(check-memcheck
+        COMMAND ${CMAKE_CTEST_COMMAND} -j ${coreCount} --extra-verbose --force-new-ctest-process --test-action memcheck
+        COMMAND cat "${CMAKE_BINARY_DIR}/Testing/Temporary/MemoryChecker.*.log"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
 
-add_dependencies(check all_tests)
-add_dependencies(check-memcheck all_tests)
+    add_dependencies(check all_tests)
+    add_dependencies(check-memcheck all_tests)
+endif()
 
 
 # Add beautify target
