@@ -101,11 +101,11 @@ add_executable(benchmarkPipeRead)
 target_sources(benchmarkPipeRead PRIVATE ${CMAKE_CURRENT_LIST_DIR}/benchmarkPipeRead.cpp)
 target_link_libraries(benchmarkPipeRead PRIVATE librapidgzip)
 
-
+if(NOT APPLE) # skip this benchmark on macos as it relies on posix_fallocate which is not available on macOS
 add_executable(benchmarkIOWrite)
 target_sources(benchmarkIOWrite PRIVATE ${CMAKE_CURRENT_LIST_DIR}/benchmarkIOWrite.cpp)
 target_link_libraries(benchmarkIOWrite PRIVATE librapidgzip)
-
+endif()
 
 add_executable(empiricalFalsePositiveRate EXCLUDE_FROM_ALL)
 target_sources(empiricalFalsePositiveRate PRIVATE ${CMAKE_CURRENT_LIST_DIR}/empiricalFalsePositiveRate.cpp)
