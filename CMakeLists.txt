@@ -16,9 +16,9 @@ endif()
 # There are too many bugs on macOS and I don't have a local test system.
 # See https://github.com/mxmlnkn/indexed_bzip2/pull/22#issuecomment-3156326658
 # Help from macOS users in the form of a PR fixing the linked issue would be very welcome!
-if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    set(WITH_ISAL OFF)
-endif()
+#if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+#    set(WITH_ISAL OFF)
+#endif()
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "" FORCE)
 
