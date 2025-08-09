@@ -352,6 +352,8 @@ class Build(build_ext):
                 '-std=c++17',
                 '-O3',
                 '-DNDEBUG',
+                # https://github.com/mjansson/rpmalloc/issues/297#issuecomment-3171952804
+                '-DENABLE_OVERRIDE=0',
                 '-DWITH_PYTHON_SUPPORT',
                 '-D_LARGEFILE64_SOURCE=1',
                 '-D_GLIBCXX_ASSERTIONS',
