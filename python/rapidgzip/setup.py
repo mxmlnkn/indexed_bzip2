@@ -391,8 +391,6 @@ class Build(build_ext):
 
         defines = {
             "NDEBUG": None,
-            # https://github.com/mjansson/rpmalloc/issues/297#issuecomment-3171952804
-            "ENABLE_OVERRIDE": "0",
             "WITH_PYTHON_SUPPORT": "0",
             "ZLIB_SYMBOL_PREFIX": "LIBRAPIDARCHIVE_",
         }

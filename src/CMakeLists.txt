@@ -32,7 +32,7 @@ target_sources(rpmalloc PRIVATE
 set_target_properties(rpmalloc PROPERTIES C_STANDARD 11)
 set_target_properties(rpmalloc PROPERTIES LINKER_LANGUAGE C)
 # ENABLE_OVERRIDE=1 results in a segfault from _dl_start_user
-target_compile_definitions(rpmalloc PUBLIC ENABLE_OVERRIDE=0 ENABLE_ASSERTS=0)
+target_compile_definitions(rpmalloc PUBLIC ENABLE_ASSERTS=0)
 
 option(ENABLE_RPMALLOC_STATISTICS "Enables statistics for rpmalloc" OFF)
 if (ENABLE_RPMALLOC_STATISTICS)
