@@ -1,0 +1,67 @@
+name: Publish Static Binaries
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  Static-Binary-Release:
+    #if: startsWith(github.ref, 'refs/tags/rapidgzip-v')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt update
+        sudo apt-get -y install clang g++ ninja-build gzip tabix pigz gztool libarchive-dev zlib1g-dev isal nasm
+
+    - name: Fix pip
+      run: |
+        echo "PIP_BREAK_SYSTEM_PACKAGES=1" >> "${GITHUB_ENV}"
+
+    - name: Install Python Dependencies
+      run: |
+        python3 -m pip install --upgrade pip || true  # Fails on macOS because of homebrew
+        python3 -m pip install --upgrade-strategy eager --upgrade indexed_gzip pgzip
+
+    - name: Run Tests With Sanitizers (GCC)
+      env:
+        LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB: ${{ matrix.use_system_zlib }}
+      run: |
+        CXX=g++ CC=gcc cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLIBRAPIDARCHIVE_WITH_ISAL=ON -DLIBRAPIDARCHIVE_USE_SYSTEM_ZLIB=$LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB -DCMAKE_EXE_LINKER_FLAGS='-static-libgcc -static-libstdc++' -DCMAKE_POSITION_INDEPENDENT_CODE=ON .
+        cmake --build build -v
+        cmake --build build -v -- check
+        stat build/src/tools/rapidgzip
+
+    # For some dumb reason, Github creates a dummy tag with the commit message as contents?!
+    # Therefore, delete that and fetch the actual tag -.-
+    - name: Fetch tags
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        git tag -n99 -l  # Print wrong auto-generated tag.
+        git tag -d ${{ github.ref_name }} || true
+        git fetch origin ${{ github.ref }}:${{ github.ref }}
+
+    - name: Prepare Message
+      run: |
+        # The tag format should follow: https://github.com/mxmlnkn/ratarmount/releases/tag/v1.0.0
+        # but with leading # removed (because the normal git tag tool would remove those as comments)
+        git tag -l --format='%(contents)' ${{ github.ref_name }} |
+          sed -E 's|^(rapidgzip?)|#\1|; s|^([A-Z][A-Za-z]*)|## \1|' > release.md
+        cat .github/workflows/release-template.md >> release.md
+
+    - uses: ncipollo/release-action@v1
+      with:
+        artifacts: "build/src/tools/rapidgzip"
+        tag: ${{ github.ref_name }}
+        name: "rapidgzip ${{ github.ref_name }}"
+        bodyFile: release.md
+        allowUpdates: true
+        removeArtifacts: true
+        replacesArtifacts: true
+        updateOnlyUnreleased: true
+        prerelease: true
+        makeLatest: false
