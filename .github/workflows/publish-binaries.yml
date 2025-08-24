@@ -1,0 +1,150 @@
+name: Publish Static Binaries
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  Static-Binary-Build:
+    #if: startsWith(github.ref, 'refs/tags/rapidgzip-v')
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_suffix: 'linux-x86_64'
+          - os: ubuntu-24.04-arm
+            artifact_suffix: 'linux-aarch64'
+          - os: macos-latest
+            artifact_suffix: 'darwin-aarch64'
+          - os: windows-latest
+            artifact_suffix: 'windows-x86_64'
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install System Dependencies
+      if: startsWith( matrix.os, 'ubuntu' )
+      run: |
+        sudo apt update
+        sudo apt-get -y install clang-19 g++ ninja-build gzip tabix pigz gztool libarchive-dev zlib1g-dev isal nasm
+
+    - name: Install System Dependencies
+      if: startsWith( matrix.os, 'macos' )
+      run: |
+        brew install -q ninja pigz
+
+    - name: Install System Dependencies
+      if: startsWith( matrix.os, 'windows' )
+      run: |
+        choco install ninja nasm
+
+    - name: Fix pip
+      run: |
+        echo "PIP_BREAK_SYSTEM_PACKAGES=1" >> "${GITHUB_ENV}"
+
+    - name: Install Python Dependencies for the Tests
+      if: startsWith( matrix.os, 'ubuntu' )
+      run: |
+        python3 -m pip install --upgrade pip || true  # Fails on macOS because of homebrew
+        python3 -m pip install --upgrade-strategy eager --upgrade indexed_gzip pgzip
+
+    #- name: Install LLVM-MinGW (Windows)
+    #  if: startsWith( matrix.os, 'windows' )
+    #  run: |
+    #    echo "LLVM_MINGW_URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/llvm-mingw-20230801-ucrt-x86_64.zip" >> $GITHUB_ENV
+    #    echo "LLVM_MINGW_DIR=llvm-mingw-20230801-ucrt-x86_64" >> $GITHUB_ENV
+    #    curl -L -o llvm-mingw.zip $LLVM_MINGW_URL
+    #    unzip -q llvm-mingw.zip
+    #    echo "$PWD/$LLVM_MINGW_DIR/bin" >> $GITHUB_PATH
+
+    - name: Configure CMake
+      shell: bash
+      env:
+        LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB: false
+      run: |
+        EXTRA_ARGS=()
+        EXTRA_ARGS+=( -DLIBRAPIDARCHIVE_USE_SYSTEM_ZLIB=$LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB )
+        EXTRA_ARGS+=( -DCMAKE_POSITION_INDEPENDENT_CODE=ON )
+        if command -v clang-19 &>/dev/null; then
+            CC=clang-19
+            CXX=clang++-19
+            export CC CXX
+        fi
+        if [[ ! "${{ matrix.os }}" =~ windows ]]; then
+            # These flags work for clang and gcc. Interestingly, clang seems to also link against libgcc.
+            EXTRA_ARGS+=( -DCMAKE_EXE_LINKER_FLAGS='-static-libgcc -static-libstdc++' )
+        fi
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLIBRAPIDARCHIVE_WITH_ISAL=ON "${EXTRA_ARGS[@]}" .
+
+    - name: Build
+      run: |
+        cmake --build build
+
+    - name: Run Tests
+      run: |
+        cmake --build build -- check
+
+    - name: Rename Binary
+      run: |
+        mv build/src/tools/rapidgzip* .
+
+    - name: Package Binary
+      if: endsWith( matrix.artifact_suffix, '.zip' )
+      shell: bash
+      env:
+        ARTIFACT_SUFFIX: ${{ artifact_suffix }}
+      run: |
+        VERSION=$( build/src/tools/rapidgzip* --version | sed -nE 's|.*version ([0-9.]*).*|\1|p' )
+        ARTIFACT_SUFFIX=$VERSION-$ARTIFACT_SUFFIX
+        if [[ "$ARTIFACT_SUFFIX" =~ *.zip ]]; then
+            zip "rapidgzip-$ARTIFACT_SUFFIX" rapidgzip*
+        else
+            tar -czf "rapidgzip-$ARTIFACT_SUFFIX" rapidgzip
+        fi
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: rapidgzip-${{ artifact_suffix }}
+        path: "rapidgzip-*${{ artifact_suffix }}"
+
+  Static-Binary-Release:
+    #if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: [Static-Binary-Build]
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: rapidgzip*
+
+    # For some dumb reason, Github creates a dummy tag with the commit message as contents?!
+    # Therefore, delete that and fetch the actual tag -.-
+    - name: Fetch tags
+      run: |
+        git tag -n99 -l  # Print wrong auto-generated tag.
+        git tag -d ${{ github.ref_name }} || true
+        git fetch origin ${{ github.ref }}:${{ github.ref }}
+
+    - name: Prepare Message
+      run: |
+        # The tag format should follow: https://github.com/mxmlnkn/ratarmount/releases/tag/v1.0.0
+        # but with leading # removed (because the normal git tag tool would remove those as comments)
+        git tag -l --format='%(contents)' ${{ github.ref_name }} |
+          sed -E 's|^(rapidgzip?)|#\1|; s|^([A-Z][A-Za-z]*)|## \1|' > release.md
+        cat .github/workflows/release-template.md >> release.md
+
+    - uses: ncipollo/release-action@v1
+      with:
+        artifacts: "rapidgzip*"
+        tag: ${{ github.ref_name }}
+        name: "rapidgzip ${{ github.ref_name }}"
+        bodyFile: release.md
+        allowUpdates: true
+        removeArtifacts: true
+        replacesArtifacts: true
+        updateOnlyUnreleased: true
+        prerelease: true
+        makeLatest: false
