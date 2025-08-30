@@ -329,9 +329,9 @@ testTwoStagedDecoding( const std::string& encodedFilePath,
 }
 
 void
-testSeekingWithIndex( const std::string& encodedFilePath,
-                      const std::string& gzipIndexPath,
-                      const std::string& decodedFilePath )
+testSeekingWithIndex( const std::filesystem::path& encodedFilePath,
+                      const std::filesystem::path& gzipIndexPath,
+                      const std::filesystem::path& decodedFilePath )
 {
     GzipReader gzipReader{ std::make_unique<StandardFileReader>( encodedFilePath ) };
 
@@ -374,7 +374,7 @@ testSeekingWithIndex( const std::string& encodedFilePath,
 }
 
 void
-testCloning( const std::string& encodedFilePath )
+testCloning( const std::filesystem::path& encodedFilePath )
 {
     GzipReader gzipReader{ std::make_unique<StandardFileReader>( encodedFilePath ) };
 

@@ -3,7 +3,8 @@ cmake_minimum_required(VERSION 3.17)
 
 project("Indexed BZip2/Gzip Decoder" CXX)
 
-option(LIBRAPIDARCHIVE_BUILD_TESTS "Build tests and benchmarks" ON)
+option(LIBRAPIDARCHIVE_BUILD_BENCHMARKS "Build benchmarks" OFF)
+option(LIBRAPIDARCHIVE_BUILD_TESTS "Build tests" ON)
 option(LIBRAPIDARCHIVE_BUILD_TOOLS "Build tools" ON)
 option(LIBRAPIDARCHIVE_CODE_COVERAGE "Enable coverage reporting" OFF)
 option(LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB "Use the system-installed zlib library instead of compiling it from source" OFF)

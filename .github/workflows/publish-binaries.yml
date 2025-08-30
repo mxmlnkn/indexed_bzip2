@@ -10,16 +10,17 @@ jobs:
   Static-Binary-Build:
     #if: startsWith(github.ref, 'refs/tags/rapidgzip-v')
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_suffix: 'linux-x86_64'
+            artifact_suffix: 'linux-x86_64.tar.gz'
           - os: ubuntu-24.04-arm
-            artifact_suffix: 'linux-aarch64'
+            artifact_suffix: 'linux-aarch64.tar.gz'
           - os: macos-latest
-            artifact_suffix: 'darwin-aarch64'
+            artifact_suffix: 'darwin-aarch64.tar.gz'
           - os: windows-latest
-            artifact_suffix: 'windows-x86_64'
+            artifact_suffix: 'windows-x86_64.zip'
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -33,31 +34,27 @@ jobs:
     - name: Install System Dependencies
       if: startsWith( matrix.os, 'macos' )
       run: |
-        brew install -q ninja pigz
+        brew install -q ninja pigz htslib
+
+    - uses: conda-incubator/setup-miniconda@v3
+      if: startsWith( matrix.os, 'windows' )
+      with:
+        auto-update-conda: true
 
     - name: Install System Dependencies
       if: startsWith( matrix.os, 'windows' )
       run: |
         choco install ninja nasm
+        conda install conda-forge::pigz
 
     - name: Fix pip
       run: |
         echo "PIP_BREAK_SYSTEM_PACKAGES=1" >> "${GITHUB_ENV}"
 
     - name: Install Python Dependencies for the Tests
-      if: startsWith( matrix.os, 'ubuntu' )
       run: |
         python3 -m pip install --upgrade pip || true  # Fails on macOS because of homebrew
         python3 -m pip install --upgrade-strategy eager --upgrade indexed_gzip pgzip
-
-    #- name: Install LLVM-MinGW (Windows)
-    #  if: startsWith( matrix.os, 'windows' )
-    #  run: |
-    #    echo "LLVM_MINGW_URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/llvm-mingw-20230801-ucrt-x86_64.zip" >> $GITHUB_ENV
-    #    echo "LLVM_MINGW_DIR=llvm-mingw-20230801-ucrt-x86_64" >> $GITHUB_ENV
-    #    curl -L -o llvm-mingw.zip $LLVM_MINGW_URL
-    #    unzip -q llvm-mingw.zip
-    #    echo "$PWD/$LLVM_MINGW_DIR/bin" >> $GITHUB_PATH
 
     - name: Configure CMake
       shell: bash
@@ -65,18 +62,38 @@ jobs:
         LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB: false
       run: |
         EXTRA_ARGS=()
+        EXTRA_ARGS+=( -DLIBRAPIDARCHIVE_BUILD_BENCHMARKS=OFF )
         EXTRA_ARGS+=( -DLIBRAPIDARCHIVE_USE_SYSTEM_ZLIB=$LIBRAPIDARCHIVE_USE_SYSTEM_ZLIB )
         EXTRA_ARGS+=( -DCMAKE_POSITION_INDEPENDENT_CODE=ON )
         if command -v clang-19 &>/dev/null; then
+            # Use the most recent compiler for hopefully better performance.
+            # E.g., my simple std::find test only was compiled into SIMD with GCC 15.0.
             CC=clang-19
             CXX=clang++-19
             export CC CXX
+            # Compiling with C++26 might improve performance thanks to better trivial relocation support.
+            EXTRA_ARGS+=( -DCMAKE_CXX_FLAGS='-std=c++2c' )
         fi
-        if [[ ! "${{ matrix.os }}" =~ windows ]]; then
+        if [[ "${{ matrix.os }}" =~ windows ]]; then
+            EXTRA_ARGS+=( -DCMAKE_EXE_LINKER_FLAGS='-static' )
+        elif [[ "${{ matrix.os }}" =~ ubuntu ]]; then
             # These flags work for clang and gcc. Interestingly, clang seems to also link against libgcc.
+            # -static-libgcc errors on macOS and -static-libstdc++ gives an "unused argument" warning.
             EXTRA_ARGS+=( -DCMAKE_EXE_LINKER_FLAGS='-static-libgcc -static-libstdc++' )
         fi
-        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLIBRAPIDARCHIVE_WITH_ISAL=ON "${EXTRA_ARGS[@]}" .
+        if [[ ! "${{ matrix.os }}" =~ ubuntu ]]; then
+            # Yields bus error in testParallelGzipReader if enabled.
+            # testParallelGzipReader fails even in very simple tests
+            # 25: [FAIL on line 199] !decodedFile.fail()
+            # 25: [FAIL on line 200] static_cast<size_t>( decodedFile.gcount() ) == buffer.size()
+            # 25: [FAIL on line 202] std::equal( buffer.begin(), buffer.end(), decodedBuffer.begin() )
+            # 25: Decoded contents differ at position 0 B: (26 != 25) while decoding
+            # "256B-extended-ASCII-table-in-utf8-dynamic-Huffman" with buffer size 1
+            EXTRA_ARGS+=( -DLIBRAPIDARCHIVE_WITH_ISAL=OFF )
+        else
+            EXTRA_ARGS+=( -DLIBRAPIDARCHIVE_WITH_ISAL=ON )
+        fi
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "${EXTRA_ARGS[@]}" .
 
     - name: Build
       run: |
@@ -86,18 +103,15 @@ jobs:
       run: |
         cmake --build build -- check
 
-    - name: Rename Binary
-      run: |
-        mv build/src/tools/rapidgzip* .
-
     - name: Package Binary
-      if: endsWith( matrix.artifact_suffix, '.zip' )
       shell: bash
       env:
-        ARTIFACT_SUFFIX: ${{ artifact_suffix }}
+        ARTIFACT_SUFFIX: ${{ matrix.artifact_suffix }}
       run: |
-        VERSION=$( build/src/tools/rapidgzip* --version | sed -nE 's|.*version ([0-9.]*).*|\1|p' )
+        RAPIDGZIP=$( find build/src/tools -maxdepth 1 -type f -name 'rapidgzip*' )
+        VERSION=$( "$RAPIDGZIP" --version | sed -nE 's|.*version ([0-9.]*).*|\1|p' )
         ARTIFACT_SUFFIX=$VERSION-$ARTIFACT_SUFFIX
+        mv "$RAPIDGZIP" .
         if [[ "$ARTIFACT_SUFFIX" =~ *.zip ]]; then
             zip "rapidgzip-$ARTIFACT_SUFFIX" rapidgzip*
         else
@@ -106,8 +120,8 @@ jobs:
 
     - uses: actions/upload-artifact@v4
       with:
-        name: rapidgzip-${{ artifact_suffix }}
-        path: "rapidgzip-*${{ artifact_suffix }}"
+        name: rapidgzip-${{ matrix.artifact_suffix }}
+        path: "rapidgzip-*${{ matrix.artifact_suffix }}"
 
   Static-Binary-Release:
     #if: startsWith(github.ref, 'refs/tags/v')
@@ -118,11 +132,13 @@ jobs:
 
     - uses: actions/download-artifact@v4
       with:
+        merge-multiple: true
         pattern: rapidgzip*
 
     # For some dumb reason, Github creates a dummy tag with the commit message as contents?!
     # Therefore, delete that and fetch the actual tag -.-
     - name: Fetch tags
+      if: startsWith(github.ref, 'refs/tags/v')
       run: |
         git tag -n99 -l  # Print wrong auto-generated tag.
         git tag -d ${{ github.ref_name }} || true
