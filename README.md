@@ -13,14 +13,14 @@
 
 </div>
 
-This repository contains the code for the [`indexed_bzip2`](python/indexed_bzip2) and [`rapidgzip`](python/rapidgzip) Python modules.
+This repository contains the code for the [`indexed_bzip2`](python/indexed_bzip2) and [`rapidgzip`](https://github.com/mxmlnkn/rapidgzip) Python modules.
 Both are built upon the same basic architecture to enable block-parallel decoding based on prefetching and caching.
 
 <div align="center">
 
 # rapidgzip
 
-[![Changelog](https://img.shields.io/badge/Changelog-Markdown-blue)](https://github.com/mxmlnkn/indexed_bzip2/blob/master/python/rapidgzip/CHANGELOG.md)
+[![Changelog](https://img.shields.io/badge/Changelog-Markdown-blue)](https://github.com/mxmlnkn/rapidgzip/blob/main/CHANGELOG.md)
 [![PyPI version](https://badge.fury.io/py/rapidgzip.svg)](https://badge.fury.io/py/rapidgzip)
 [![Python Version](https://img.shields.io/pypi/pyversions/rapidgzip)](https://pypi.org/project/rapidgzip/)
 [![PyPI Platforms](https://img.shields.io/badge/pypi-linux%20%7C%20macOS%20%7C%20Windows-brightgreen)](https://pypi.org/project/rapidgzip/)
@@ -44,14 +44,9 @@ The random seeking support is similar to the one provided by [indexed_gzip](http
 | rapidgzip with parallelization = 12 | 4463               | 17.7    |
 | rapidgzip with parallelization = 24 | 5240               | 20.8    |
 
-[**See here for the extended Readme.**](python/rapidgzip#readme)
+[**See here for the dedicated repository and ReadMe.**](https://github.com/mxmlnkn/rapidgzip#readme)
 
-There also exists a dedicated repository for rapidgzip [here](https://github.com/mxmlnkn/rapidgzip).
-It was created for visibility reasons and in order to keep indexed_bzip2 and rapidgzip releases separate.
-The main development will take place in [this](https://github.com/mxmlnkn/indexed_bzip2) repository, while the rapidgzip repository will be updated at least for each release.
-Issues regarding rapidgzip should be opened at [its repository](https://github.com/mxmlnkn/rapidgzip/issues).
-
-A paper describing the implementation details and showing the scaling behavior with up to 128 cores has been submitted to and [accepted](https://www.hpdc.org/2023/program/technical-sessions/) in [ACM HPDC'23](https://www.hpdc.org/2023/), The 32nd International Symposium on High-Performance Parallel and Distributed Computing.
+A paper describing the implementation details and showing the scaling behavior with up to 128 cores has been [accepted](https://www.hpdc.org/2023/program/technical-sessions/) in [ACM HPDC'23](https://www.hpdc.org/2023/), The 32nd International Symposium on High-Performance Parallel and Distributed Computing.
 If you use this software for your scientific publication, please cite it as stated [here](python/rapidgzip#citation).
 The author's version can be found [here](<results/paper/Knespel, Brunst - 2023 - Rapidgzip - Parallel Decompression and Seeking in Gzip Files Using Cache Prefetching.pdf>) and the accompanying presentation [here](results/Presentation-2023-06-22.pdf).
 
