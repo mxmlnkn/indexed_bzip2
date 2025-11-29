@@ -180,7 +180,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15, windows-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel, windows-latest]
 
     env:
       MACOSX_DEPLOYMENT_TARGET: "13.0"
@@ -267,7 +267,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel]
 
     steps:
     - uses: actions/checkout@v4
@@ -323,7 +323,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel]
 
     steps:
     - uses: actions/checkout@v4
@@ -378,7 +378,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel]
 
     steps:
     - uses: actions/checkout@v4
@@ -508,7 +508,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15, windows-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel, windows-latest]
 
     steps:
     - uses: actions/checkout@v4
