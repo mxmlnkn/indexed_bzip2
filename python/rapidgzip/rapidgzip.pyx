@@ -547,7 +547,7 @@ cdef class _RapidgzipFile():
         if not self.gzipReader:
             raise Exception("Invalid file object!")
 
-        if isinstance(file, str):
+        if isinstance(file, (str, os.PathLike)):
             with builtins.open(file, "rb") as fileObject:
                 return self.gzipReader.importIndex(<PyObject*>fileObject)
         return self.gzipReader.importIndex(<PyObject*>file)
@@ -556,7 +556,7 @@ cdef class _RapidgzipFile():
         if not self.gzipReader:
             raise Exception("Invalid file object!")
 
-        if isinstance(file, str):
+        if isinstance(file, (str, os.PathLike)):
             with builtins.open(file, "wb") as fileObject:
                 return self.gzipReader.exportIndex(<PyObject*>fileObject, index_format)
         return self.gzipReader.exportIndex(<PyObject*>file, index_format)
