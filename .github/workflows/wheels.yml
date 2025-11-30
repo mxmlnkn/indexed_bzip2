@@ -11,6 +11,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-14, macos-15, macos-15-intel, ubuntu-24.04-arm, ubuntu-latest, windows-latest]
         archs: [auto64]
@@ -74,9 +75,6 @@ jobs:
         CIBW_ARCHS: ${{ matrix.archs }}
         CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux-image }}
         CIBW_ENABLE: "pypy"
-        # Skip cp14t on Windows because it has problems:
-        # https://github.com/pypa/cibuildwheel/issues/2676
-        CIBW_SKIP: "*cp3??t-win*"
       run: python -m cibuildwheel --output-dir dist python/indexed_bzip2
 
     - name: Check Wheels
