@@ -244,6 +244,59 @@ testMultiGzipStream()
 
 template<typename InflateWrapper>
 void
+testEmptyStoredGzipStream()
+{
+    /* An empty gzip stream whose deflate stream consists of a single empty, final, stored block as written,
+     * e.g., by libdeflate for empty input. It ends byte-aligned, which must not be mistaken for the end of data. */
+    const std::vector<std::byte> dataToCompress = { std::byte( 'A' ) };
+    const auto singleGzipStream = compressWithZlib( dataToCompress );
+
+    using Bytes = std::decay_t<decltype( singleGzipStream )>;
+    const Bytes emptyStoredGzipStream = {
+        0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,  // gzip header
+        0x01, 0x00, 0x00, 0xFF, 0xFF,                                // final stored block, LEN = 0, NLEN
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,              // CRC32, ISIZE
+    };
+
+    Bytes compressedData;
+    compressedData.insert( compressedData.end(), singleGzipStream.begin(), singleGzipStream.end() );
+    compressedData.insert( compressedData.end(), emptyStoredGzipStream.begin(), emptyStoredGzipStream.end() );
+    compressedData.insert( compressedData.end(), singleGzipStream.begin(), singleGzipStream.end() );
+    const std::vector<std::byte> expectedResult = { std::byte( 'A' ), std::byte( 'A' ) };
+
+    auto fileReader = std::make_unique<SharedFileReader>(
+        std::make_unique<BufferViewFileReader>( compressedData ) );
+    gzip::BitReader bitReader( std::move( fileReader ) );
+    bitReader.seek( 10 * CHAR_BIT );  // Deflate wrapper expects to start at deflate block
+    InflateWrapper inflateWrapper( std::move( bitReader ), compressedData.size() * BYTE_SIZE );
+
+    std::vector<std::byte> decompressedResult( expectedResult.size(), std::byte( 1 ) );
+    constexpr auto GZIP_HEADER_SIZE = 10U;
+
+    auto [decompressedSize, footer] = inflateWrapper.readStream(
+        reinterpret_cast<uint8_t*>( decompressedResult.data() ), decompressedResult.size() );
+    REQUIRE_EQUAL( decompressedSize, dataToCompress.size() );
+    REQUIRE( footer.has_value() );
+
+    /* The empty stream must return its footer instead of signaling the end of data. */
+    std::tie( decompressedSize, footer ) = inflateWrapper.readStream(
+        reinterpret_cast<uint8_t*>( decompressedResult.data() + 1U ), dataToCompress.size() );
+    REQUIRE_EQUAL( decompressedSize, 0U );
+    REQUIRE( footer.has_value() );
+    REQUIRE_EQUAL( inflateWrapper.tellCompressed(),
+                   ( singleGzipStream.size() + emptyStoredGzipStream.size() + GZIP_HEADER_SIZE ) * BYTE_SIZE );
+
+    std::tie( decompressedSize, footer ) = inflateWrapper.readStream(
+        reinterpret_cast<uint8_t*>( decompressedResult.data() + 1U ), dataToCompress.size() );
+    REQUIRE_EQUAL( decompressedSize, dataToCompress.size() );
+    REQUIRE( footer.has_value() );
+    REQUIRE_EQUAL( inflateWrapper.tellCompressed(), compressedData.size() * BYTE_SIZE );
+    REQUIRE( decompressedResult == expectedResult );
+}
+
+
+template<typename InflateWrapper>
+void
 testSmallReads( const std::filesystem::path& compressedFilePath,
                 const std::filesystem::path& originalFilePath )
 {
@@ -670,6 +723,7 @@ testInflateWrapper( const std::filesystem::path& rootFolder )
     }
 
     testMultiGzipStream<InflateWrapper>();
+    testEmptyStoredGzipStream<InflateWrapper>();
     testGettingFooter<InflateWrapper>();
 }
 
