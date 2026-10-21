@@ -73,7 +73,7 @@ using namespace rapidgzip;
  *     1 KiB : 334.5 <= 335.3 +- 0.7 <= 336.0
  *   128   B : 310.9 <= 313.5 +- 2.4 <= 315.6
  *     8   B : 128.8 <= 131.0 +- 1.9 <= 132.3
- *  -> Also stable along a very large range! Unfortunately, not exposted via Python any longer.
+ *  -> Also stable along a very large range! Unfortunately, not exposed via Python any longer.
  *
  * Decompressed 1364784177 B to 4239155200 B with rapidgzip (parallel: 1 cores):
  *   512 MiB : 295   <= 298   +- 3   <= 301
