@@ -295,6 +295,57 @@ testEmptyStoredGzipStream()
 }
 
 
+/**
+ * After the last stream has been decoded, further readStream calls must neither throw nor return a footer.
+ * This requires readHeader to reset the zlib stream even at the end of the file. Else, it would stay in the
+ * DONE state and inflate would return Z_STREAM_END again without any progress.
+ */
+template<typename InflateWrapper>
+void
+testReadingPastEnd( const ContainerFormat containerFormat )
+{
+    const std::vector<std::byte> dataToCompress = { std::byte( 'A' ), std::byte( 'B' ) };
+    const auto compressedData = compressWithZlib( dataToCompress, CompressionStrategy::DEFAULT,
+                                                  /* dictionary */ {}, containerFormat );
+
+    size_t headerSize{ 0 };
+    auto fileType = FileType::DEFLATE;
+    switch ( containerFormat )
+    {
+    case ContainerFormat::DEFLATE: headerSize = 0;  fileType = FileType::DEFLATE; break;
+    case ContainerFormat::ZLIB:    headerSize = 2;  fileType = FileType::ZLIB;    break;
+    case ContainerFormat::GZIP:    headerSize = 10; fileType = FileType::GZIP;    break;
+    }
+
+    auto fileReader = std::make_unique<SharedFileReader>(
+        std::make_unique<BufferViewFileReader>( compressedData ) );
+    gzip::BitReader bitReader( std::move( fileReader ) );
+    bitReader.seek( static_cast<long long int>( headerSize * CHAR_BIT ) );
+    InflateWrapper inflateWrapper( std::move( bitReader ) );
+    inflateWrapper.setFileType( fileType );
+
+    std::vector<std::byte> decompressedResult( 16, std::byte( 1 ) );
+    auto [decompressedSize, footer] = inflateWrapper.readStream(
+        reinterpret_cast<uint8_t*>( decompressedResult.data() ), decompressedResult.size() );
+    REQUIRE_EQUAL( decompressedSize, dataToCompress.size() );
+    REQUIRE( footer.has_value() );
+    REQUIRE_EQUAL( inflateWrapper.tellCompressed(), compressedData.size() * BYTE_SIZE );
+
+    for ( size_t i = 0; i < 3; ++i ) {
+        try {
+            std::tie( decompressedSize, footer ) = inflateWrapper.readStream(
+                reinterpret_cast<uint8_t*>( decompressedResult.data() ), decompressedResult.size() );
+            REQUIRE_EQUAL( decompressedSize, 0U );
+            REQUIRE( !footer.has_value() );
+            REQUIRE_EQUAL( inflateWrapper.tellCompressed(), compressedData.size() * BYTE_SIZE );
+        } catch ( const std::exception& exception ) {
+            std::cerr << "Reading past the end threw: " << exception.what() << "\n";
+            REQUIRE( false );
+        }
+    }
+}
+
+
 template<typename InflateWrapper>
 void
 testSmallReads( const std::filesystem::path& compressedFilePath,
@@ -724,6 +775,9 @@ testInflateWrapper( const std::filesystem::path& rootFolder )
 
     testMultiGzipStream<InflateWrapper>();
     testEmptyStoredGzipStream<InflateWrapper>();
+    testReadingPastEnd<InflateWrapper>( ContainerFormat::DEFLATE );
+    testReadingPastEnd<InflateWrapper>( ContainerFormat::ZLIB );
+    testReadingPastEnd<InflateWrapper>( ContainerFormat::GZIP );
     testGettingFooter<InflateWrapper>();
 }
 

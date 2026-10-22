@@ -329,9 +329,6 @@ ZlibInflateWrapper::readStream( uint8_t* const output,
         m_needToReadHeader = false;
     }
 
-    /* Used to distinguish an already finished stream from an empty one that was decoded during this call. */
-    const auto startOffset = tellCompressed();
-
     size_t decodedSize{ 0 };
     /* Do not check for avail_out == 0 here so that progress can still be made on empty blocks as might
      * appear in pigz files or at the end of BGZF files. Note that zlib's inflate should return Z_BUF_ERROR
@@ -402,13 +399,6 @@ ZlibInflateWrapper::readStream( uint8_t* const output,
         const auto progressedOutput = m_stream.total_out != oldTotalOut;
 
         if ( errorCode == Z_STREAM_END ) {
-            /* Checking only progressedBits of this last inflate call is not sufficient: for an empty gzip member
-             * consisting of a single empty stored final block (01 00 00 ff ff, as written by libdeflate for empty
-             * input), the stored block is consumed by the previous inflate call and this one only transitions to
-             * DONE without consuming bits because the stream is already byte-aligned. */
-            if ( ( m_stream.total_out == 0 ) && !progressedBits && ( tellCompressed() == startOffset ) ) {
-                break;
-            }
             decodedSize += m_stream.total_out;
 
             /* If we started with raw deflate, then we also have to skip over the gzip footer.
@@ -594,7 +584,9 @@ ZlibInflateWrapper::readHeader()
             return static_cast<uint64_t>( readBytes<1U>().front() );
         } );
         if ( error == Error::END_OF_FILE ) {
-            return;
+            /* Still reset the stream below. Else, it would stay in the DONE state and inflate would return
+             * Z_STREAM_END again without making any progress. */
+            break;
         }
         if ( error != Error::NONE ) {
             std::stringstream message;
